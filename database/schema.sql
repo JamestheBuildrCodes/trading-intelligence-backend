@@ -95,19 +95,12 @@ drop policy if exists "Users can view their own trading accounts" on public.trad
 create policy "Users can view their own trading accounts"
     on public.trading_accounts for select to authenticated
     using (user_id = (select auth.uid()));
+-- Account changes go through FastAPI, which authenticates the user and
+-- validates inputs. Do not let browser clients forge balances or sync status.
+-- Drop any write policies left over from an earlier draft of this schema.
 drop policy if exists "Users can create their own trading accounts" on public.trading_accounts;
-create policy "Users can create their own trading accounts"
-    on public.trading_accounts for insert to authenticated
-    with check (user_id = (select auth.uid()));
 drop policy if exists "Users can update their own trading accounts" on public.trading_accounts;
-create policy "Users can update their own trading accounts"
-    on public.trading_accounts for update to authenticated
-    using (user_id = (select auth.uid()))
-    with check (user_id = (select auth.uid()));
 drop policy if exists "Users can delete their own trading accounts" on public.trading_accounts;
-create policy "Users can delete their own trading accounts"
-    on public.trading_accounts for delete to authenticated
-    using (user_id = (select auth.uid()));
 
 drop policy if exists "Users can view raw deals for their own accounts" on public.raw_deals;
 create policy "Users can view raw deals for their own accounts"

@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -9,7 +10,8 @@ class Settings(BaseSettings):
     supabase_url: str
     # Server-only key. Never expose this as a NEXT_PUBLIC_* variable.
     supabase_service_role_key: str
-    connector_token_pepper: str = "change-me"
+    # Required: don't silently hash connector tokens with a public default.
+    connector_token_pepper: str = Field(min_length=32)
     ai_daily_budget_usd: float = 1.0
     allowed_origins: str = "http://localhost:3000"
 

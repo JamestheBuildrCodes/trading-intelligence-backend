@@ -33,7 +33,7 @@ Rules engine violations, the full Trading DNA/Performance Leaks/Experiments anal
    ```
 5. Visit `http://localhost:8000/health` for a successful health response and `http://localhost:8000/docs` for the API reference.
 
-Do not commit `.env`; do not put the service-role key in the frontend. The server-only key bypasses RLS, so every account-scoped API endpoint must retain the user/account ownership checks.
+Do not commit `.env`; do not put the service-role key in the frontend. The server-only key bypasses RLS, so every account-scoped API endpoint must retain the user/account ownership checks. Set a random `CONNECTOR_TOKEN_PEPPER` with at least 32 characters; startup fails rather than use an insecure default.
 
 ## Environment variables
 
