@@ -1,43 +1,30 @@
-# TradeGrid MT5 Bridge (read-only)
+# Trading Intelligence MT5 Python Bridge (read-only)
 
-This bridge runs on **Windows**, on the same computer/VPS as MetaTrader 5. It uses the official MetaTrader5 Python package to read account information and deal history, then sends closed/opening deal records to the TradeGrid backend. It does not submit, change, or close orders.
+This Windows sidecar connects an already logged-in MetaTrader 5 terminal to the Trading Intelligence backend. It reads account metrics and historical deals only. It does not contain trade execution functions and must not be represented as a native MT5 EA.
 
-## Important limitation
+## Requirements and demo-first workflow
 
-This bridge is a first integration path, not proof that the full product is production-ready. It requires a working MT5 terminal, a logged-in account, a deployed backend, the database schema/migrations applied, and a connector token. It has not been validated against your specific broker terminal from this repository environment. Test with a demo account first.
-
-## Setup on Windows
-
-1. Install 64-bit Python compatible with the installed MetaTrader 5 terminal and install MetaTrader 5.
-2. Open MT5, log in to the intended **demo account first**, and confirm quotes/history are available.
-3. Create a TradeGrid account in the dashboard, or use the existing account UUID.
-4. Using a valid Supabase access token, call `POST /api/v1/accounts/{account_id}/connector-tokens`. The response contains a token displayed only once. Keep it private.
-5. Download this repository and open PowerShell in `mt5_bridge`.
-6. Create a virtual environment and install dependencies:
+1. Use Windows with a compatible 64-bit Python installation and the MetaTrader 5 desktop terminal.
+2. Open MT5 and log in to the intended **demo account**. Confirm history is available.
+3. Create an account in Trading Intelligence.
+4. Using a valid Supabase user access token, call `POST /api/v1/accounts/{account_id}/connector-tokens`. The raw token is returned once only. Save it securely; never put it in Git.
+5. In this directory, run:
 
 ```powershell
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 Copy-Item .env.example .env
 ```
 
-7. Edit `.env` with the backend URL, account UUID, and connector token. Never commit this file.
-8. If MT5 is installed in a nonstandard location, set `MT5_TERMINAL_PATH` to the full path of `terminal64.exe`. Otherwise leave it blank and keep MT5 open and logged in.
-9. Run:
+6. Edit `.env` with the Render API URL, account UUID and one-time token. Set `MT5_TERMINAL_PATH` if MT5 isn't discoverable.
+7. Run `python mt5_bridge.py`. Keep MT5 and the bridge running. For always-on sync, use a reliable Windows VPS only after successful demo reconciliation.
 
-```powershell
-python mt5_bridge.py
-```
+## Reliability notes
 
-The first run reads up to the configured lookback (30 days by default); later polls re-read a two-day overlap. Duplicate deal uploads are intended to be safe because the backend upserts on account + MT5 deal ID.
-
-## Safety and operational notes
-
-- The bridge is read-only and contains no order execution calls.
-- Use a separate connector token for each TradeGrid account. Revoke it if exposed.
-- Keep the MT5 terminal and bridge process running for ongoing sync.
-- A desktop computer sleeping or a VPS disconnecting will stop sync.
-- Backend authentication, schema, broker symbol conventions, netting/hedging behaviour, commission handling, and history completeness must be verified before relying on analytics.
-- This initial implementation uses the opening deal to determine position direction. If the configured history window does not contain an opening deal for a position, that deal is skipped rather than guessing direction.
-- Do not use these analytics as a guarantee of future trading performance.
+- Initial history lookback defaults to 30 days; later runs use an overlapping window. Backend uniqueness on account + MT5 deal ID is intended to make retries idempotent.
+- The bridge requires a logged-in terminal. It does not validate the broker/account identity against dashboard metadata yet; verify the connected login, broker server and account currency in the logs and reconcile them manually before relying on the data.
+- The current schema does not faithfully represent netting reversals (`DEAL_ENTRY_INOUT`); such positions are skipped by trade aggregation to avoid misleading metrics. Full netting support is a required follow-up.
+- The deployed backend must have the current schema and environment variables configured before running this bridge.
+- Connector tokens are account-scoped. Revoke and reissue any token that may have been exposed.
+- This is analytics infrastructure, not financial advice and not a guarantee of future results.

@@ -18,13 +18,11 @@ def ingest_deals(
     db: Client = Depends(get_supabase),
 ):
     position_ids: set[str] = set()
-
     for deal in batch.deals:
-        row = deal.model_dump()
+        # model_dump(mode='json') serializes timestamps for PostgREST.
+        row = deal.model_dump(mode="json")
         row["account_id"] = account_id
-        row["deal_time"] = deal.deal_time.isoformat()
         row["raw_payload"] = deal.model_dump(mode="json")
-        # ignore_duplicates makes this safe to retry — a resent deal is a no-op.
         db.table("raw_deals").upsert(
             row, on_conflict="account_id,mt5_deal_id", ignore_duplicates=True
         ).execute()
@@ -41,7 +39,6 @@ def ingest_deals(
         account_update["current_balance"] = batch.balance
     if batch.equity is not None:
         account_update["current_equity"] = batch.equity
-
     db.table("trading_accounts").update(account_update).eq("id", account_id).execute()
 
-    return {"ingested": len(batch.deals), "positions_recomputed": len(position_ids)}
+    return {"received": len(batch.deals), "positions_recomputed": len(position_ids)}

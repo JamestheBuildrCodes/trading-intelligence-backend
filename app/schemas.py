@@ -1,6 +1,7 @@
 from datetime import datetime
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class AccountCreate(BaseModel):
@@ -12,12 +13,17 @@ class AccountCreate(BaseModel):
     mt5_login: str | None = Field(default=None, max_length=80)
     currency: str = Field(default="USD", min_length=3, max_length=8)
     account_type: str = Field(default="personal", min_length=1, max_length=40)
-    initial_balance: float = Field(default=0, ge=0)
+    initial_balance: float = Field(default=0, ge=0, allow_inf_nan=False)
     timezone: str = Field(default="UTC", min_length=1, max_length=80)
     session_reference_tz: str = Field(default="America/New_York", min_length=1, max_length=80)
     risk_mode: str = Field(default="fixed", min_length=1, max_length=40)
-    risk_value: float = Field(default=0, ge=0)
+    risk_value: float = Field(default=0, ge=0, allow_inf_nan=False)
     risk_base: str = Field(default="initial_balance", min_length=1, max_length=40)
+
+    @field_validator("currency")
+    @classmethod
+    def normalize_currency(cls, value: str) -> str:
+        return value.upper()
 
 
 class AccountOut(BaseModel):
@@ -32,29 +38,36 @@ class AccountOut(BaseModel):
 
 
 class ConnectorTokenOut(BaseModel):
-    token: str  # raw token — shown once, never retrievable again
+    token: str
     expires_at: datetime
 
 
 class DealIn(BaseModel):
-    mt5_deal_id: str
-    mt5_order_id: str | None = None
-    mt5_position_id: str
-    entry_type: str  # in | out | inout | out_by
-    symbol: str
-    direction: str  # buy | sell
-    volume: float = Field(gt=0)
-    price: float = Field(ge=0)
-    profit: float = 0
-    commission: float = 0
-    swap: float = 0
+    mt5_deal_id: str = Field(min_length=1, max_length=80)
+    mt5_order_id: str | None = Field(default=None, max_length=80)
+    mt5_position_id: str = Field(min_length=1, max_length=80)
+    entry_type: Literal["in", "out", "inout", "out_by"]
+    symbol: str = Field(min_length=1, max_length=80)
+    direction: Literal["buy", "sell"]
+    volume: float = Field(gt=0, allow_inf_nan=False)
+    price: float = Field(ge=0, allow_inf_nan=False)
+    profit: float = Field(default=0, allow_inf_nan=False)
+    commission: float = Field(default=0, allow_inf_nan=False)
+    swap: float = Field(default=0, allow_inf_nan=False)
     deal_time: datetime
+
+    @field_validator("deal_time")
+    @classmethod
+    def require_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("deal_time must include a timezone offset")
+        return value
 
 
 class DealBatchIn(BaseModel):
     deals: list[DealIn] = Field(max_length=1000)
-    balance: float | None = None
-    equity: float | None = None
+    balance: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    equity: float | None = Field(default=None, ge=0, allow_inf_nan=False)
 
 
 class OverviewOut(BaseModel):

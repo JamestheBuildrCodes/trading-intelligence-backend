@@ -1,11 +1,9 @@
 from datetime import datetime, timezone
-from zoneinfo import ZoneInfo
 
 from supabase import Client
 
-# UTC-hour session windows. Simple and DST-stable enough for MVP; refine
-# later using trading_accounts.session_reference_tz if precision matters
-# more than this (see docs/ADR.md, ADR-007).
+# MVP UTC-hour session windows. A later analytics iteration should use the
+# account's configured reference timezone and daylight-saving-aware market hours.
 SESSION_WINDOWS = [
     ("asia", 0, 9),
     ("london", 8, 17),
@@ -14,78 +12,84 @@ SESSION_WINDOWS = [
 
 
 def classify_session(dt_utc: datetime) -> str:
+    if dt_utc.tzinfo is None or dt_utc.utcoffset() is None:
+        raise ValueError("Session classification requires a timezone-aware datetime")
     hour = dt_utc.astimezone(timezone.utc).hour
     active = [name for name, start, end in SESSION_WINDOWS if start <= hour < end]
     if len(active) > 1:
         return "overlap"
-    if active:
-        return active[0]
-    return "off_session"
+    return active[0] if active else "off_session"
 
 
-def _parse_dt(value: str) -> datetime:
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+def _parse_dt(value: str | datetime) -> datetime:
+    if isinstance(value, datetime):
+        result = value
+    else:
+        result = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if result.tzinfo is None or result.utcoffset() is None:
+        raise ValueError("Stored deal timestamps must include a timezone")
+    return result
+
+
+def _weighted_price(deals: list[dict]) -> float:
+    volume = sum(float(d["volume"]) for d in deals)
+    if volume <= 0:
+        raise ValueError("Deal volume must be positive")
+    return sum(float(d["price"]) * float(d["volume"]) for d in deals) / volume
 
 
 def aggregate_position(db: Client, account_id: str, mt5_position_id: str) -> None:
+    """Aggregate one closed position using persisted MT5 deal history.
+
+    The initial schema uses one trade row per position ID and cannot faithfully
+    model netting reversals (MT5 entry_type='inout') as separate trade legs.
+    Such histories are stored for audit but deliberately excluded from derived
+    metrics until a position-leg schema migration exists.
     """
-    Recomputes the `trades` row for one position from every raw_deals row
-    seen for it so far. Idempotent — safe to call after every new deal.
-    Only upserts into `trades` once the position looks fully closed
-    (closing volume >= opening volume); until then it waits, since a
-    partially-closed position has no accurate exit price yet.
-    """
-    deals_result = (
+    query = (
         db.table("raw_deals")
         .select("*")
         .eq("account_id", account_id)
         .eq("mt5_position_id", mt5_position_id)
         .order("deal_time")
-        .execute()
     )
-    deals = deals_result.data
-    if not deals:
+    deals = query.execute().data or []
+    if not deals or any(d["entry_type"] == "inout" for d in deals):
         return
 
     opening = [d for d in deals if d["entry_type"] == "in"]
     closing = [d for d in deals if d["entry_type"] in ("out", "out_by")]
-
     if not opening or not closing:
-        return  # nothing to aggregate yet, or position still fully open
+        return
 
-    opened_volume = sum(d["volume"] for d in opening)
-    closed_volume = sum(d["volume"] for d in closing)
+    opened_volume = sum(float(d["volume"]) for d in opening)
+    closed_volume = sum(float(d["volume"]) for d in closing)
+    if opened_volume <= 0 or closed_volume + 1e-6 < opened_volume:
+        return
 
-    # Tolerance for float rounding on lot sizes.
-    if closed_volume + 1e-6 < opened_volume:
-        return  # still partially open — wait for more closing deals
+    direction = opening[0]["direction"]
+    symbol = opening[0]["symbol"]
+    if any(d["direction"] != direction or d["symbol"] != symbol for d in opening):
+        return
 
-    entry_price = sum(d["price"] * d["volume"] for d in opening) / opened_volume
-    exit_price = sum(d["price"] * d["volume"] for d in closing) / closed_volume
-    entry_at = _parse_dt(min(d["deal_time"] for d in opening))
-    exit_at = _parse_dt(max(d["deal_time"] for d in closing))
-
-    profit = sum(d["profit"] for d in deals)
-    commission = sum(d["commission"] for d in deals)
-    swap = sum(d["swap"] for d in deals)
-
+    entry_at = min(_parse_dt(d["deal_time"]) for d in opening)
+    exit_at = max(_parse_dt(d["deal_time"]) for d in closing)
     row = {
         "account_id": account_id,
         "mt5_position_id": mt5_position_id,
-        "symbol": opening[0]["symbol"],
-        "direction": opening[0]["direction"],
+        "symbol": symbol,
+        "direction": direction,
         "volume": opened_volume,
-        "entry_price": entry_price,
-        "exit_price": exit_price,
-        "entry_at": entry_at.isoformat(),
-        "exit_at": exit_at.isoformat(),
-        "holding_seconds": int((exit_at - entry_at).total_seconds()),
+        "entry_price": _weighted_price(opening),
+        "exit_price": _weighted_price(closing),
+        "entry_at": entry_at.astimezone(timezone.utc).isoformat(),
+        "exit_at": exit_at.astimezone(timezone.utc).isoformat(),
+        "holding_seconds": max(0, int((exit_at - entry_at).total_seconds())),
         "is_partial_close": len(closing) > 1,
-        "profit": profit,
-        "commission": commission,
-        "swap": swap,
+        "profit": sum(float(d["profit"]) for d in deals),
+        "commission": sum(float(d.get("commission") or 0) for d in deals),
+        "swap": sum(float(d.get("swap") or 0) for d in deals),
         "session": classify_session(entry_at),
         "day_of_week": entry_at.isoweekday() % 7,
     }
-
     db.table("trades").upsert(row, on_conflict="account_id,mt5_position_id").execute()
