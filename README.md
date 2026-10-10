@@ -37,13 +37,14 @@ Do not commit `.env`; do not put the service-role key in the frontend. The serve
 
 ## Environment variables
 
-- `SUPABASE_URL`: Supabase Project URL.
-- `SUPABASE_SERVICE_ROLE_KEY`: server-only service-role key.
-- `CONNECTOR_TOKEN_PEPPER`: a long random secret used to hash MT5 connector tokens. Keep it stable once issued.
-- `ALLOWED_ORIGINS`: comma-separated frontend origins, for example `http://localhost:3000,https://your-app.vercel.app`.
-- `AI_DAILY_BUDGET_USD`: future AI-call budget limit.
+- SUPABASE_URL: Supabase Project URL.
+- SUPABASE_SECRET_KEY: recommended server-only secret API key. Never expose it to browsers or source control.
+- SUPABASE_SERVICE_ROLE_KEY: optional fallback for legacy Supabase projects.
+- CONNECTOR_TOKEN_PEPPER: a long random secret used to hash MT5 connector tokens. Keep it stable once issued and use at least 32 characters.
+- ALLOWED_ORIGINS: comma-separated frontend origins, for example http://localhost:3000,https://your-app.vercel.app.
+- AI_DAILY_BUDGET_USD: future AI-call budget limit.
 
-See [the Supabase setup guide](docs/supabase-setup.md) for dashboard configuration, auth redirects, deployment, and smoke testing.
+See docs/supabase-setup.md for dashboard configuration, auth redirects, deployment, and smoke testing.
 
 ## Deploying (Render)
 
