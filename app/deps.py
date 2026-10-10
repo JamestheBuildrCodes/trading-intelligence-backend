@@ -1,10 +1,10 @@
 from datetime import datetime, timezone
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException
 from supabase import Client
 
 from app.db import get_supabase
-from app.security import decode_supabase_jwt, hash_connector_token
+from app.security import hash_connector_token
 
 
 class CurrentUser:
@@ -13,15 +13,41 @@ class CurrentUser:
         self.email = email
 
 
-def get_current_user(authorization: str | None = Header(default=None)) -> CurrentUser:
-    if not authorization or not authorization.lower().startswith("bearer "):
-        raise HTTPException(status_code=401, detail="Missing bearer token")
-    token = authorization.split(" ", 1)[1]
-    payload = decode_supabase_jwt(token)
-    user_id = payload.get("sub")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Token missing subject")
-    return CurrentUser(id=user_id, email=payload.get("email"))
+def get_current_user(
+    authorization: str | None = Header(default=None),
+    db: Client = Depends(get_supabase),
+) -> CurrentUser:
+    """
+    Validate the bearer token with Supabase Auth itself.
+
+    This supports projects using legacy HS256 JWT signing or newer asymmetric
+    signing keys. The backend never trusts an unverified subject claim.
+    """
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Missing bearer token", headers={"WWW-Authenticate": "Bearer"})
+
+    scheme, separator, token = authorization.partition(" ")
+    if not separator or scheme.lower() != "bearer" or not token.strip():
+        raise HTTPException(status_code=401, detail="Missing bearer token", headers={"WWW-Authenticate": "Bearer"})
+
+    try:
+        response = db.auth.get_user(token.strip())
+        auth_user = getattr(response, "user", None)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired session token",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+
+    if not auth_user or not getattr(auth_user, "id", None):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired session token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    return CurrentUser(id=str(auth_user.id), email=getattr(auth_user, "email", None))
 
 
 def require_account_owner(
@@ -30,9 +56,8 @@ def require_account_owner(
     db: Client = Depends(get_supabase),
 ) -> str:
     """
-    Verifies the account belongs to the requesting user. Required on every
-    account-scoped route since the backend uses the service-role key, which
-    bypasses RLS — this check is the substitute for it at this layer.
+    Verify account ownership for every account-scoped endpoint. The backend
+    uses a service-role client, which bypasses RLS, so this check is mandatory.
     """
     result = (
         db.table("trading_accounts")
@@ -51,11 +76,7 @@ def require_connector_token(
     x_connector_token: str | None = Header(default=None),
     db: Client = Depends(get_supabase),
 ) -> str:
-    """
-    Authenticates the read-only MT5 bridge/EA. Returns the account_id the
-    token is scoped to. Updates last_used_at as a side effect so the
-    dashboard's "connection status" reflects real recent activity.
-    """
+    """Authenticate the MT5 bridge and return the token's scoped account ID."""
     if not x_connector_token:
         raise HTTPException(status_code=401, detail="Missing X-Connector-Token header")
 
