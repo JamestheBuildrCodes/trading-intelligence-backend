@@ -9,8 +9,7 @@ class Settings(BaseSettings):
     supabase_url: str
     # Server-only key. Never expose this as a NEXT_PUBLIC_* variable.
     supabase_service_role_key: str
-    # Must be set to a strong, stable random secret in every environment.
-    # There is deliberately no unsafe fallback.
+    # Stable, random secret used to hash MT5 connector tokens. Set it explicitly.
     connector_token_pepper: str
     ai_daily_budget_usd: float = 1.0
     allowed_origins: str = "http://localhost:3000"
