@@ -9,7 +9,9 @@ class Settings(BaseSettings):
     supabase_url: str
     # Server-only key. Never expose this as a NEXT_PUBLIC_* variable.
     supabase_service_role_key: str
-    connector_token_pepper: str = "change-me"
+    # Must be set to a strong, stable random secret in every environment.
+    # There is deliberately no unsafe fallback.
+    connector_token_pepper: str
     ai_daily_budget_usd: float = 1.0
     allowed_origins: str = "http://localhost:3000"
 
