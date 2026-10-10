@@ -39,27 +39,22 @@ def _weighted_price(deals: list[dict]) -> float:
 
 
 def aggregate_position(db: Client, account_id: str, mt5_position_id: str) -> None:
-    """
-    Recompute one MT5 position from its raw history.
+    """Aggregate one closed position using persisted MT5 deal history.
 
     The initial schema uses one trade row per position ID and cannot faithfully
-    model a netting reversal (inout) as two separate trade legs. Do not create
-    potentially false analytics for any position containing an inout record
-    until the position-leg schema migration is implemented.
+    model netting reversals (MT5 entry_type='inout') as separate trade legs.
+    Such histories are stored for audit but deliberately excluded from derived
+    metrics until a position-leg schema migration exists.
     """
-    deals_result = (
+    query = (
         db.table("raw_deals")
         .select("*")
         .eq("account_id", account_id)
         .eq("mt5_position_id", mt5_position_id)
         .order("deal_time")
-        .execute()
     )
-    deals = deals_result.data or []
-    if not deals:
-        return
-
-    if any(d["entry_type"] == "inout" for d in deals):
+    deals = query.execute().data or []
+    if not deals or any(d["entry_type"] == "inout" for d in deals):
         return
 
     opening = [d for d in deals if d["entry_type"] == "in"]
@@ -69,11 +64,12 @@ def aggregate_position(db: Client, account_id: str, mt5_position_id: str) -> Non
 
     opened_volume = sum(float(d["volume"]) for d in opening)
     closed_volume = sum(float(d["volume"]) for d in closing)
-    if opened_volume <= 0 or closed_volume <= 0 or closed_volume + 1e-6 < opened_volume:
+    if opened_volume <= 0 or closed_volume + 1e-6 < opened_volume:
         return
 
     direction = opening[0]["direction"]
-    if any(d["direction"] != direction for d in opening):
+    symbol = opening[0]["symbol"]
+    if any(d["direction"] != direction or d["symbol"] != symbol for d in opening):
         return
 
     entry_at = min(_parse_dt(d["deal_time"]) for d in opening)
@@ -81,7 +77,7 @@ def aggregate_position(db: Client, account_id: str, mt5_position_id: str) -> Non
     row = {
         "account_id": account_id,
         "mt5_position_id": mt5_position_id,
-        "symbol": opening[0]["symbol"],
+        "symbol": symbol,
         "direction": direction,
         "volume": opened_volume,
         "entry_price": _weighted_price(opening),
