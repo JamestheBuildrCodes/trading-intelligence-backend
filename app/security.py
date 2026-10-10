@@ -8,6 +8,7 @@ from app.config import get_settings
 
 
 def decode_supabase_jwt(token: str) -> dict:
+    """Verify a Supabase access token without leaking token-validation details."""
     settings = get_settings()
     try:
         payload = jwt.decode(
@@ -17,9 +18,12 @@ def decode_supabase_jwt(token: str) -> dict:
             audience="authenticated",
         )
     except jwt.PyJWTError as exc:
+        # Detailed JWT exceptions can reveal implementation information to
+        # unauthenticated callers. Keep the internal exception as the cause.
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Invalid or expired session token: {exc}",
+            detail="Invalid or expired session token",
+            headers={"WWW-Authenticate": "Bearer"},
         ) from exc
     return payload
 
