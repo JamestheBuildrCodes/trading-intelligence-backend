@@ -1,54 +1,61 @@
 # Trading Intelligence — Backend (FastAPI)
 
+FastAPI backend for the TradeGrid/Trading Intelligence dashboard.
+
 ## What's built
-- `POST /api/v1/accounts` / `GET /api/v1/accounts` — create/list your trading accounts
-- `POST /api/v1/accounts/{id}/connector-tokens` — issue a bearer token for the MT5 bridge
-- `POST /api/v1/connector/deals` — ingestion endpoint the MT5 bridge pushes closed deals to
-- `GET /api/v1/accounts/{id}/overview` — the numbers the dashboard's KPI cards need
-- `GET /api/v1/accounts/{id}/trades` — trade list with symbol/session filters
-- Deal-to-trade aggregation (raw_deals → trades), idempotent, handles partial closes
-- Supabase Auth verification (dashboard requests) + separate connector-token auth (MT5 bridge requests) — two different trust boundaries, see docs/ADR.md
+
+- `POST /api/v1/accounts` and `GET /api/v1/accounts` — create/list a user's trading accounts.
+- `POST /api/v1/accounts/{id}/connector-tokens` — issue a one-time read-only MT5 bridge token.
+- `POST /api/v1/connector/deals` — ingest closed MT5 deals through a separate connector-token trust boundary.
+- `GET /api/v1/accounts/{id}/overview` and `GET /api/v1/accounts/{id}/trades` — dashboard performance endpoints.
+- Deal-to-trade aggregation from `raw_deals` into `trades`, with idempotent deal ingestion.
+- Supabase Auth validation for dashboard access tokens. Tokens are verified by Supabase Auth itself, so the backend does not depend on a legacy HS256 signing secret.
+- A read-only Windows MT5 Python bridge under `mt5_bridge/`.
 
 ## Not built yet
-- Rules engine violations, Trading DNA, Performance Leaks, Experiments, AI Coach, Telegram bot
-- The MT5 EA/bridge itself (next piece — this backend is what it talks to)
+
+Rules engine violations, the full Trading DNA/Performance Leaks/Experiments analysis suite, AI Coach, Telegram bot, and a full-featured native MT5 EA. The current API should not be described as having these features complete.
 
 ## Local setup
-```
-cd backend
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env   # fill in the values below
-uvicorn app.main:app --reload
-```
-Visit `http://localhost:8000/health` — should return `{"status": "ok"}`.
-Interactive API docs at `http://localhost:8000/docs`.
 
-## Environment variables — where each one comes from
-- `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` — Supabase dashboard →
-  Project Settings → API. Service role key is secret — never put it in the
-  frontend or commit it.
-- `SUPABASE_JWT_SECRET` — same page, "JWT Settings" section.
-- `CONNECTOR_TOKEN_PEPPER` — any long random string you make up yourself,
-  e.g. from `python3 -c "import secrets; print(secrets.token_hex(32))"`.
-- `ALLOWED_ORIGINS` — your Vercel frontend URL(s), comma-separated.
+1. Create a Supabase project.
+2. Run the full `database/schema.sql` file in **Supabase Dashboard -> SQL Editor**.
+3. Create a local environment file from the example and fill in the values:
+   ```bash
+   python -m venv .venv
+   # Windows: .venv\Scripts\activate
+   # macOS/Linux: source .venv/bin/activate
+   pip install -r requirements.txt
+   ```
+4. Start the API:
+   ```bash
+   uvicorn app.main:app --reload
+   ```
+5. Visit `http://localhost:8000/health` for a successful health response and `http://localhost:8000/docs` for the API reference.
 
-## Deploying (Render free tier)
-1. Push this `backend/` folder's repo to GitHub (same account as the frontend, can be the same repo or a separate one — separate is simpler for two different deploy targets).
-2. render.com → New → Web Service → connect the repo.
-3. Root directory: `backend` (if it's in the same repo as the frontend).
-4. Build command: `pip install -r requirements.txt`
-5. Start command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
-6. Add the environment variables above under the service's Environment tab.
-7. Deploy. You'll get a URL like `https://your-service.onrender.com`.
-8. Update the frontend's `NEXT_PUBLIC_API_BASE_URL` env var in Vercel to that URL, and add that same URL to `ALLOWED_ORIGINS` here (redeploy both).
+Do not commit `.env`; do not put the service-role key in the frontend. The server-only key bypasses RLS, so every account-scoped API endpoint must retain the user/account ownership checks.
 
-Free-tier Render services sleep after inactivity — the first request after
-a sleep takes ~30-50s to wake up. This matters for the MT5 bridge and any
-scheduled job hitting this API; a keep-alive ping (e.g. the GitHub Action
-already stubbed in `.github/workflows/daily-report.yml`) can hide this.
+## Environment variables
 
-## Database
-Apply `database/schema.sql` in the Supabase SQL Editor before running any
-of this — every endpoint here assumes those tables and RLS policies exist.
+- `SUPABASE_URL`: Supabase Project URL.
+- `SUPABASE_SERVICE_ROLE_KEY`: server-only service-role key.
+- `CONNECTOR_TOKEN_PEPPER`: a long random secret used to hash MT5 connector tokens. Keep it stable once issued.
+- `ALLOWED_ORIGINS`: comma-separated frontend origins, for example `http://localhost:3000,https://your-app.vercel.app`.
+- `AI_DAILY_BUDGET_USD`: future AI-call budget limit.
+
+See [the Supabase setup guide](docs/supabase-setup.md) for dashboard configuration, auth redirects, deployment, and smoke testing.
+
+## Deploying (Render)
+
+1. Connect this repository as a Web Service.
+2. Build command: `pip install -r requirements.txt`.
+3. Start command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`.
+4. Add the backend environment variables in Render's Environment tab.
+5. Add the full production frontend origin to `ALLOWED_ORIGINS`, then deploy.
+6. Add the production frontend URL to Supabase Authentication -> URL Configuration.
+
+Render free services may sleep after inactivity, so the first request can be slow.
+
+## Safety notes
+
+The MT5 bridge is read-only: it does not place, modify, or close trades. Test with a demo account first and reconcile the received deal history with the broker terminal. The connector token is returned only once; revoke and issue another if it is lost.
