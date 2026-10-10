@@ -19,6 +19,7 @@ def ingest_deals(
 ):
     position_ids: set[str] = set()
     for deal in batch.deals:
+        # Serialize datetime fields as ISO-8601 JSON strings for PostgREST.
         row = deal.model_dump(mode="json")
         row["account_id"] = account_id
         row["raw_payload"] = deal.model_dump(mode="json")
