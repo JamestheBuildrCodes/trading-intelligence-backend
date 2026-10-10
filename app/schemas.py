@@ -1,20 +1,23 @@
 from datetime import datetime
-from pydantic import BaseModel
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class AccountCreate(BaseModel):
-    label: str
-    broker: str | None = None
-    server: str | None = None
-    mt5_login: str | None = None
-    currency: str = "USD"
-    account_type: str = "personal"
-    initial_balance: float = 0
-    timezone: str = "UTC"
-    session_reference_tz: str = "America/New_York"
-    risk_mode: str = "fixed"
-    risk_value: float = 0
-    risk_base: str = "initial_balance"
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    label: str = Field(min_length=1, max_length=100)
+    broker: str | None = Field(default=None, max_length=100)
+    server: str | None = Field(default=None, max_length=150)
+    mt5_login: str | None = Field(default=None, max_length=80)
+    currency: str = Field(default="USD", min_length=3, max_length=8)
+    account_type: str = Field(default="personal", min_length=1, max_length=40)
+    initial_balance: float = Field(default=0, ge=0)
+    timezone: str = Field(default="UTC", min_length=1, max_length=80)
+    session_reference_tz: str = Field(default="America/New_York", min_length=1, max_length=80)
+    risk_mode: str = Field(default="fixed", min_length=1, max_length=40)
+    risk_value: float = Field(default=0, ge=0)
+    risk_base: str = Field(default="initial_balance", min_length=1, max_length=40)
 
 
 class AccountOut(BaseModel):
@@ -40,8 +43,8 @@ class DealIn(BaseModel):
     entry_type: str  # in | out | inout | out_by
     symbol: str
     direction: str  # buy | sell
-    volume: float
-    price: float
+    volume: float = Field(gt=0)
+    price: float = Field(ge=0)
     profit: float = 0
     commission: float = 0
     swap: float = 0
@@ -49,7 +52,7 @@ class DealIn(BaseModel):
 
 
 class DealBatchIn(BaseModel):
-    deals: list[DealIn]
+    deals: list[DealIn] = Field(max_length=1000)
     balance: float | None = None
     equity: float | None = None
 
@@ -77,5 +80,8 @@ class TradeOut(BaseModel):
     entry_at: datetime | None = None
     exit_at: datetime | None = None
     profit: float
+    commission: float = 0
+    swap: float = 0
     session: str | None = None
     is_partial_close: bool
+    rule_violations: list[str] = Field(default_factory=list)
