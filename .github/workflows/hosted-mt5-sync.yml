@@ -26,14 +26,14 @@ on:
 
 # Scheduling intentionally disabled for the first import. After verifying the
 # initial history end-to-end, optional recurring sync can be enabled by adding:
-# schedule:
-#   - cron: "17 */6 * * *"
+#   schedule:
+#     - cron: "17 */6 * * *"
 
 permissions:
   contents: read
 
 concurrency:
-  group: hosted-mt5-history-${{ inputs.account_id || github.ref }}
+  group: hosted-mt5-history-import
   cancel-in-progress: false
 
 jobs:
