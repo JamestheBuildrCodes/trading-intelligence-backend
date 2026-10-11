@@ -9,7 +9,7 @@ from supabase import Client
 PLAN_ENTITLEMENTS: dict[str, dict[str, Any]] = {
     "free": {
         "max_accounts": 1,
-        "full_history_analytics": False,
+        "full_history_analytics": True,
         "advanced_cost_analysis": False,
         "portfolio_risk": False,
         "prop_firm_cockpit": False,
@@ -32,7 +32,7 @@ PLAN_ENTITLEMENTS: dict[str, dict[str, Any]] = {
         "portfolio_risk": True,
         "prop_firm_cockpit": True,
         "hosted_mt5": True,
-        "ai_coach_monthly_messages": 100,
+        "ai_coach_monthly_messages": 0,
     },
     "enterprise": {
         "max_accounts": None,
@@ -73,7 +73,7 @@ def get_user_entitlements(db: Client, user_id: str) -> dict[str, Any]:
         plan = "free"
     return {
         "plan": plan,
-        "subscription_status": row.get("status") if row else "inactive",
+        "subscription_status": ("expired" if row and not paid and row.get("status") in ("active", "trialing") else row.get("status")) if row else "inactive",
         "billing_period": row.get("billing_period") if paid and row else None,
         "current_period_end": row.get("current_period_end") if paid and row else None,
         "cancel_at_period_end": bool(row.get("cancel_at_period_end")) if paid and row else False,
