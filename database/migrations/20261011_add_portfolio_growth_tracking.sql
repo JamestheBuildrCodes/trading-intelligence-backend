@@ -27,3 +27,28 @@ create index if not exists portfolio_cash_flows_account_time_idx on public.portf
 alter table public.portfolio_snapshots enable row level security;
 alter table public.portfolio_cash_flows enable row level security;
 -- Reads/writes go through FastAPI, which enforces account ownership. No browser policies are added.
+
+-- Idempotent additions for broker-imported cash movements.
+alter table public.portfolio_cash_flows
+  add column if not exists source text not null default 'manual';
+alter table public.portfolio_cash_flows
+  add column if not exists external_id text;
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.portfolio_cash_flows'::regclass
+      and conname = 'portfolio_cash_flows_source_check'
+  ) then
+    alter table public.portfolio_cash_flows
+      add constraint portfolio_cash_flows_source_check check (source in ('manual', 'mt5'));
+  end if;
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.portfolio_cash_flows'::regclass
+      and conname = 'portfolio_cash_flows_account_external_unique'
+  ) then
+    alter table public.portfolio_cash_flows
+      add constraint portfolio_cash_flows_account_external_unique unique (account_id, external_id);
+  end if;
+end $$;
