@@ -1,6 +1,6 @@
-# Trading Intelligence — Backend (FastAPI)
+# Tradvoryx — Backend (FastAPI)
 
-FastAPI backend for the Trading Intelligence dashboard.
+FastAPI backend for the Tradvoryx dashboard.
 
 ## Implemented
 
@@ -23,7 +23,7 @@ FastAPI backend for the Trading Intelligence dashboard.
 
 ## Local setup
 
-1. Run `database/schema.sql` in Supabase SQL Editor for a new project. For the existing Trading Intelligence project, use the incremental migration in `database/migrations/20261011_align_backend_schema_and_auth_profile_trigger.sql` instead; do not replace the existing expanded schema with the initial schema.
+1. Run `database/schema.sql` in Supabase SQL Editor for a new project. For the existing Tradvoryx project, use the incremental migration in `database/migrations/20261011_align_backend_schema_and_auth_profile_trigger.sql` instead; do not replace the existing expanded schema with the initial schema.
 2. Copy `.env.example` to `.env` and fill in every required value.
 3. Create and activate a virtual environment, then install dependencies:
 
@@ -70,7 +70,7 @@ See [mt5_bridge/README.md](mt5_bridge/README.md). Connect a demo account first. 
 
 ## Hosted MT5 connections and free GitHub Actions history import
 
-TradeGrid already has one read-only MetaApi history worker. Use the repository's GitHub-hosted runner instead of paying for a separate Render Cron Job. The account must first be configured through the existing hosted connection flow; GitHub Actions does not store or receive the MT5 password.
+Tradvoryx already has one read-only MetaApi history worker. Use the repository's GitHub-hosted runner instead of paying for a separate Render Cron Job. The account must first be configured through the existing hosted connection flow; GitHub Actions does not store or receive the MT5 password.
 
 ### Database readiness verified
 
@@ -95,7 +95,7 @@ The GitHub integration cannot read or create Actions secret values. Do not paste
 
 ### First manual run
 
-1. In TradeGrid **Accounts**, open the existing Headway account whose server is Headway-Real. Connect it through the hosted MT5 flow using an investor/read-only password. The broker login/server/currency must match this TradeGrid account. The password is submitted to MetaApi for cloud hosting; TradeGrid does not persist it. Do not use a master trading password.
+1. In Tradvoryx **Accounts**, open the existing Headway account whose server is Headway-Real. Connect it through the hosted MT5 flow using an investor/read-only password. The broker login/server/currency must match this Tradvoryx account. The password is submitted to MetaApi for cloud hosting; Tradvoryx does not persist it. Do not use a master trading password.
 2. Confirm the account's hosted provider connection is saved and its status is not disconnected. The importer refuses to process the target unless the submitted account UUID points to a configured MetaApi provider account, includes a login/server, and identifies Headway REAL/LIVE (not demo).
 3. Open the [backend repository Actions tab](https://github.com/JamestheBuildrCodes/trading-intelligence-backend/actions).
 4. Select **Hosted MT5 historical import (manual)** and choose **Run workflow**.
@@ -130,14 +130,14 @@ The Actions runner uses the same configured secrets to connect directly to MetaA
 
 ## Paystack subscription billing (gated until merchant setup)
 
-TradeGrid includes a server-side Paystack billing flow. Paid checkout remains disabled until the merchant configures the provider secret and the exact plan codes in Render. No browser-supplied amount grants access.
+Tradvoryx includes a server-side Paystack billing flow. Paid checkout remains disabled until the merchant configures the provider secret and the exact plan codes in Render. No browser-supplied amount grants access.
 
 ### Paystack dashboard configuration
-Create four recurring plans in **USD** with these exact amounts and intervals. A Nigerian Paystack merchant must have USD acceptance enabled (and an eligible USD settlement arrangement) before setting up these plans; account eligibility for international payments and recurring card charges is determined by Paystack, not TradeGrid.
-- TradeGrid Trader Monthly — USD 15, monthly.
-- TradeGrid Trader Annual — USD 144, annually.
-- TradeGrid Pro Monthly — USD 29, monthly.
-- TradeGrid Pro Annual — USD 288, annually.
+Create four recurring plans in **USD** with these exact amounts and intervals. A Nigerian Paystack merchant must have USD acceptance enabled (and an eligible USD settlement arrangement) before setting up these plans; account eligibility for international payments and recurring card charges is determined by Paystack, not Tradvoryx.
+- Tradvoryx Trader Monthly — USD 15, monthly.
+- Tradvoryx Trader Annual — USD 144, annually.
+- Tradvoryx Pro Monthly — USD 29, monthly.
+- Tradvoryx Pro Annual — USD 288, annually.
 
 Set the resulting plan codes as `PAYSTACK_TRADER_MONTHLY_PLAN_CODE`, `PAYSTACK_TRADER_YEARLY_PLAN_CODE`, `PAYSTACK_PRO_MONTHLY_PLAN_CODE`, and `PAYSTACK_PRO_YEARLY_PLAN_CODE`. Set `PAYSTACK_SECRET_KEY` server-side, and set `APP_BASE_URL` to the real production URL. Confirm the Paystack account is enabled for USD billing and recurring card subscriptions before turning checkout on.
 
@@ -146,7 +146,7 @@ Configure the Paystack webhook URL to:
 
 Checkout requires a verified Supabase email. The backend enforces the account cap in both FastAPI and an atomic PostgreSQL trigger, so concurrent account-creation requests cannot bypass a plan allowance.
 
-The webhook verifies Paystack's HMAC-SHA512 signature, verifies each successful transaction server-side, checks its reference/amount/currency/plan against a TradeGrid-created checkout intent, processes provider event IDs idempotently, and never activates an entitlement from a browser return alone. Subsequent recurring charges are linked to an existing subscription and checked against the server-configured plan amount. Failed payments move the subscription to past_due; verified cancellation events remove paid entitlements.
+The webhook verifies Paystack's HMAC-SHA512 signature, verifies each successful transaction server-side, checks its reference/amount/currency/plan against a Tradvoryx-created checkout intent, processes provider event IDs idempotently, and never activates an entitlement from a browser return alone. Subsequent recurring charges are linked to an existing subscription and checked against the server-configured plan amount. Failed payments move the subscription to past_due; verified cancellation events remove paid entitlements.
 
 ### Endpoints
 - `GET /api/v1/billing/status` — current server-owned plan and entitlement state.
