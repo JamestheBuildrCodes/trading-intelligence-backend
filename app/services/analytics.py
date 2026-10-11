@@ -113,7 +113,7 @@ def summarize_trading_dna(trades: list[dict], minimum_sample_size: int = 30) -> 
         for trade in trades:
             raw = trade.get(key)
             label = str(raw).strip() if raw is not None and str(raw).strip() else "unknown"
-            if key == "symbol":
+            if key == "symbol" and label != "unknown":
                 label = label.upper()
             groups.setdefault(label, []).append(trade)
 
