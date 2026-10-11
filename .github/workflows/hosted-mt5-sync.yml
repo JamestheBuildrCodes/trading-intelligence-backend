@@ -1,0 +1,124 @@
+name: Hosted MT5 historical import (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      account_id:
+        description: "Exact trading_accounts UUID for the connected Headway-Real live account"
+        required: true
+        type: string
+      confirm_live_headway_account:
+        description: "Confirm this is the Headway REAL/LIVE account, not a demo account"
+        required: true
+        type: boolean
+        default: false
+      max_history_chunks:
+        description: "Bounded 180-day history windows to process in this run"
+        required: true
+        type: choice
+        options:
+          - "1"
+          - "5"
+          - "10"
+          - "20"
+          - "50"
+        default: "10"
+
+# Scheduling intentionally disabled for the first import. After verifying the
+# initial history end-to-end, optional recurring sync can be enabled by adding:
+# schedule:
+#   - cron: "17 */6 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hosted-mt5-history-${{ inputs.account_id || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  hosted-history-import:
+    name: Sync selected Headway live MT5 history
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      METAAPI_TOKEN: ${{ secrets.METAAPI_TOKEN }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+      CONNECTOR_TOKEN_PEPPER: ${{ secrets.CONNECTOR_TOKEN_PEPPER }}
+      TARGET_ACCOUNT_ID: ${{ inputs.account_id }}
+      CONFIRM_LIVE_HEADWAY_ACCOUNT: ${{ inputs.confirm_live_headway_account }}
+      MAX_HISTORY_CHUNKS: ${{ inputs.max_history_chunks }}
+      PYTHONUNBUFFERED: "1"
+      PYTHONPATH: .
+    steps:
+      - name: Check out backend
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Validate manual target and required secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$CONFIRM_LIVE_HEADWAY_ACCOUNT" != "true" ]]; then
+            echo "::error::Confirm the selected account is Headway REAL/LIVE before importing."
+            exit 1
+          fi
+          if [[ ! "$TARGET_ACCOUNT_ID" =~ ^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$ ]]; then
+            echo "::error::account_id must be a valid Supabase UUID."
+            exit 1
+          fi
+          if [[ ! "$MAX_HISTORY_CHUNKS" =~ ^(1|5|10|20|50)$ ]]; then
+            echo "::error::max_history_chunks must be one of 1, 5, 10, 20, or 50."
+            exit 1
+          fi
+          for name in METAAPI_TOKEN SUPABASE_URL SUPABASE_SECRET_KEY CONNECTOR_TOKEN_PEPPER; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "::error::Required GitHub Actions secret is missing: $name"
+              exit 1
+            fi
+          done
+          if (( ${#CONNECTOR_TOKEN_PEPPER} < 32 )); then
+            echo "::error::CONNECTOR_TOKEN_PEPPER must meet the backend's minimum length of 32 characters."
+            exit 1
+          fi
+          echo "Target input and required secret names validated. Secret values are not printed."
+
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Run backend tests
+        run: python -m pytest -q
+
+      - name: Verify worker command and CLI
+        run: python -m app.workers.hosted_mt5_sync --help
+
+      - name: Import a bounded history batch
+        run: |
+          set -euo pipefail
+          python -m app.workers.hosted_mt5_sync \
+            --account-id "$TARGET_ACCOUNT_ID" \
+            --max-history-chunks "$MAX_HISTORY_CHUNKS"
+
+      - name: Write run summary
+        if: success()
+        shell: bash
+        run: |
+          {
+            echo "## Hosted MT5 history run"
+            echo
+            echo "- Target account reference: ...${TARGET_ACCOUNT_ID: -8}"
+            echo "- Bounded history windows requested: $MAX_HISTORY_CHUNKS"
+            echo "- Worker completed without a fatal error."
+            echo "- Check worker logs for provider rows, normalized deals, duplicate estimates, skipped rows, saved cursor, earliest/latest observed deal timestamps, and whether the initial lookback is complete."
+            echo "- A successful bounded run may still require another manual run. Broker/provider retention defines the available history; lifetime completeness is not assumed."
+            echo "- Balance/equity snapshots represent sync-time observations, not reconstructed historical equity."
+          } >> "$GITHUB_STEP_SUMMARY"
