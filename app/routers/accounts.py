@@ -47,7 +47,22 @@ def create_account(
     row["user_id"] = user.id
     row["current_balance"] = body.initial_balance
     row["current_equity"] = body.initial_balance
-    result = db.table("trading_accounts").insert(row).execute()
+    try:
+        result = db.table("trading_accounts").insert(row).execute()
+    except Exception as exc:
+        # The database trigger is the atomic final guard against concurrent
+        # requests crossing plan limits; return a safe actionable response.
+        if "plan_limit_reached" in str(exc):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": "plan_limit_reached",
+                    "message": f"Your {entitlement['plan'].title()} plan has reached its trading-account limit.",
+                    "plan": entitlement["plan"],
+                    "max_accounts": max_accounts,
+                },
+            ) from None
+        raise HTTPException(status_code=500, detail="The trading account could not be created. No account data was changed.") from None
     return result.data[0]
 
 
