@@ -67,3 +67,24 @@ See [docs/supabase-setup.md](docs/supabase-setup.md) for dashboard configuration
 ## MT5 demo connection
 
 See [mt5_bridge/README.md](mt5_bridge/README.md). Connect a demo account first. The bridge only reads account information and deal history; it cannot submit, modify or close trades. Verify totals against MT5 history before relying on analytics.
+
+
+## Hosted MT5 connections (MetaApi)
+
+TradeGrid can provision an MT5 account on MetaApi and run read-only history/position synchronization from a separate worker. The account form accepts an **investor/read-only password only**. TradeGrid does not persist that password, but the credential is forwarded to MetaApi, which must retain it to maintain the hosted terminal. Do not connect accounts you are not authorized to monitor.
+
+### Required production setup
+1. Create a MetaApi account, review its current pricing/region/data-processing terms, and generate an API token with only the access needed for account provisioning and RPC history reads.
+2. Add the token as the server-side Render secret `METAAPI_TOKEN` on the web API service. Never add it as a `NEXT_PUBLIC_` environment variable, commit it, or paste it into this repository.
+3. Apply `database/migrations/20261011_add_hosted_mt5_connection.sql` to Supabase.
+4. Deploy a separate Render Cron Job from this repository/commit with command `python -m app.workers.hosted_mt5_sync`, environment `METAAPI_TOKEN`, `SUPABASE_URL`, `SUPABASE_SECRET_KEY` (or the already supported service-role key), and `CONNECTOR_TOKEN_PEPPER`. Schedule it frequently enough to satisfy the product's sync expectations; test its run duration and timeout with actual history volumes.
+5. Start with a broker demo account. Verify the connected login, exact server, account currency, earliest/latest deal timestamps, record counts, cash-flow treatment, and open position snapshots against the broker terminal before enabling marketing claims or paid access.
+
+The API endpoints are:
+- `POST /api/v1/accounts/{account_id}/hosted-mt5` to provision a hosted account.
+- `GET /api/v1/accounts/{account_id}/hosted-mt5/status` to inspect state and imported-history timestamps.
+- `POST /api/v1/accounts/{account_id}/hosted-mt5/disconnect` to request provider undeploy and removal.
+
+Hosted history sync is bounded by `METAAPI_INITIAL_LOOKBACK_DAYS` (default 10,000 days), `METAAPI_HISTORY_CHUNK_DAYS` (default 180), and `METAAPI_MAX_HISTORY_CHUNKS_PER_RUN` (default 10). Checkpoints advance only after a history window is persisted. The cursor completing means TradeGrid scanned its configured window; it **does not prove the broker has retained all historical records**. Reconcile imported history against the broker statement. MetaApi stores and operates the remote terminal; provider availability and costs are external dependencies.
+
+The worker is deliberately a separate process: do not run it inside the serverless frontend or an unbounded FastAPI request. In environments with no configured `METAAPI_TOKEN` the provision endpoint returns a clear disabled response; account records do not pretend to be connected.
