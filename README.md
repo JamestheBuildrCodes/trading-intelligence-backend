@@ -76,7 +76,7 @@ TradeGrid can provision an MT5 account on MetaApi and run read-only history/posi
 1. Create a MetaApi account, review its pricing/region/data-processing terms, and generate an API token with only the access needed for account provisioning and RPC history reads.
 2. Add the token as the server-only Render secret `METAAPI_TOKEN` on the web API service. Never add it as a `NEXT_PUBLIC_` variable or commit it.
 3. Apply `database/migrations/20261011_add_hosted_mt5_connection.sql` to Supabase.
-4. Deploy a separate Render Cron Job from this repository/commit with command `python -m app.workers.hosted_mt5_sync`, environment `METAAPI_TOKEN`, `SUPABASE_URL`, `SUPABASE_SECRET_KEY` (or supported legacy service-role key), and `CONNECTOR_TOKEN_PEPPER`. Test job runtime and timeout with actual history volumes.
+4. Apply `database/migrations/20261011_add_hosted_mt5_worker_runs.sql` in Supabase SQL Editor. Configure GitHub Actions repository secrets `METAAPI_TOKEN`, `SUPABASE_URL`, `SUPABASE_SECRET_KEY` (or legacy `SUPABASE_SERVICE_ROLE_KEY`), and `CONNECTOR_TOKEN_PEPPER`. In GitHub Actions, run **Hosted MT5 history sync** manually and set `confirm_sync=true`. The workflow is intentionally manual-only; no Render Cron Job is required. Each run processes up to 10 history chunks per eligible hosted account and can be rerun to continue the backfill.
 5. Start with an authorized broker demo account. Verify login, server, currency, earliest/latest deals, trade counts, deposits/withdrawals and open positions against MT5 before using this for decisions or marketing hosted support.
 
 Endpoints:
