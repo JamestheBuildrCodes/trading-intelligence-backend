@@ -1,0 +1,68 @@
+name: Hosted MT5 history sync
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_sync:
+        description: "Confirm that this run may sync all eligible hosted MT5 accounts in this repository's Supabase project"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hosted-mt5-history-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: ${{ inputs.confirm_sync }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      METAAPI_TOKEN: ${{ secrets.METAAPI_TOKEN }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      CONNECTOR_TOKEN_PEPPER: ${{ secrets.CONNECTOR_TOKEN_PEPPER }}
+      METAAPI_HISTORY_CHUNK_DAYS: "180"
+      METAAPI_MAX_HISTORY_CHUNKS_PER_RUN: "10"
+      PYTHONPATH: .
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Validate required configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in METAAPI_TOKEN SUPABASE_URL CONNECTOR_TOKEN_PEPPER; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "::error::Required GitHub Actions secret $name is missing."
+              missing=1
+            fi
+          done
+          if [[ -z "${SUPABASE_SECRET_KEY:-}" && -z "${SUPABASE_SERVICE_ROLE_KEY:-}" ]]; then
+            echo "::error::Set SUPABASE_SECRET_KEY or the supported legacy SUPABASE_SERVICE_ROLE_KEY secret."
+            missing=1
+          fi
+          if [[ "$missing" -ne 0 ]]; then exit 1; fi
+
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Run hosted MT5 history sync
+        run: python -m app.workers.hosted_mt5_sync
