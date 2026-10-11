@@ -1,4 +1,4 @@
-"""Read-only MetaTrader 5 -> TradeGrid connector.
+"""Read-only MetaTrader 5 -> Tradvoryx connector.
 
 Runs on Windows beside a logged-in MetaTrader 5 terminal. It never places,
 modifies, or closes orders. Deal uploads are idempotent on the backend.
@@ -23,29 +23,29 @@ logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
     format="%(asctime)s %(levelname)s %(message)s",
 )
-log = logging.getLogger("tradegrid.mt5_bridge")
+log = logging.getLogger("tradvoryx.mt5_bridge")
 
 API_BASE = os.getenv(
-    "TRADEGRID_API_BASE_URL",
-    "https://trading-intelligence-backend.onrender.com",
+    "TRADVORYX_API_BASE_URL",
+    os.getenv("TRADEGRID_API_BASE_URL", "https://trading-intelligence-backend.onrender.com"),
 ).rstrip("/")
-ACCOUNT_ID = os.getenv("TRADEGRID_ACCOUNT_ID", "").strip()
-CONNECTOR_TOKEN = os.getenv("TRADEGRID_CONNECTOR_TOKEN", "").strip()
+ACCOUNT_ID = os.getenv("TRADVORYX_ACCOUNT_ID", os.getenv("TRADEGRID_ACCOUNT_ID", "")).strip()
+CONNECTOR_TOKEN = os.getenv("TRADVORYX_CONNECTOR_TOKEN", os.getenv("TRADEGRID_CONNECTOR_TOKEN", "")).strip()
 TERMINAL_PATH = os.getenv("MT5_TERMINAL_PATH", "").strip() or None
 INITIAL_LOOKBACK_DAYS = max(1, int(os.getenv("MT5_INITIAL_LOOKBACK_DAYS", "10000")))
 HISTORY_CHUNK_DAYS = max(1, int(os.getenv("MT5_HISTORY_CHUNK_DAYS", "90")))
 OVERLAP_DAYS = max(1, int(os.getenv("MT5_SYNC_OVERLAP_DAYS", "2")))
 POLL_SECONDS = max(15, int(os.getenv("MT5_POLL_SECONDS", "60")))
 BATCH_SIZE = min(500, max(1, int(os.getenv("MT5_BATCH_SIZE", "250"))))
-SYNC_STATE_PATH = Path(os.getenv("MT5_SYNC_STATE_PATH", ".tradegrid_sync_state.json"))
+SYNC_STATE_PATH = Path(os.getenv("MT5_SYNC_STATE_PATH", ".tradvoryx_sync_state.json"))
 
 
 def require_config() -> None:
     missing = [
         name for name, value in (
-            ("TRADEGRID_ACCOUNT_ID", ACCOUNT_ID),
-            ("TRADEGRID_CONNECTOR_TOKEN", CONNECTOR_TOKEN),
-            ("TRADEGRID_API_BASE_URL", API_BASE),
+            ("TRADVORYX_ACCOUNT_ID", ACCOUNT_ID),
+            ("TRADVORYX_CONNECTOR_TOKEN", CONNECTOR_TOKEN),
+            ("TRADVORYX_API_BASE_URL", API_BASE),
         ) if not value
     ]
     if missing:
