@@ -193,6 +193,74 @@ def upload_batch(
     log.info("Backend accepted %s deals: %s", len(deals), response.json())
 
 
+def upload_positions_snapshot(client: httpx.Client) -> int:
+    """Publish a complete read-only snapshot of currently open MT5 positions."""
+    info = mt5.account_info()
+    if info is None:
+        raise RuntimeError(f"MT5 account_info failed: {mt5.last_error()}")
+    terminal_positions = mt5.positions_get()
+    if terminal_positions is None:
+        raise RuntimeError(f"MT5 positions_get failed: {mt5.last_error()}")
+
+    positions: list[dict[str, Any]] = []
+    for position in terminal_positions:
+        direction = "buy" if int(position.type) == int(mt5.POSITION_TYPE_BUY) else "sell"
+        opened_at = utc_from_epoch(int(position.time))
+        stop_loss = float(position.sl) if float(getattr(position, "sl", 0) or 0) > 0 else None
+        take_profit = float(position.tp) if float(getattr(position, "tp", 0) or 0) > 0 else None
+        risk_to_stop = None
+        if stop_loss is not None:
+            order_type = mt5.ORDER_TYPE_BUY if direction == "buy" else mt5.ORDER_TYPE_SELL
+            calculated = mt5.order_calc_profit(
+                order_type,
+                str(position.symbol),
+                float(position.volume),
+                float(position.price_open),
+                stop_loss,
+            )
+            if calculated is not None:
+                # Risk is loss at the recorded stop, denominated by MT5 in
+                # this trading account's currency. A profitable stop is zero risk.
+                risk_to_stop = round(max(0.0, -float(calculated)), 4)
+
+        positions.append({
+            "mt5_position_id": str(int(position.ticket)),
+            "symbol": str(position.symbol),
+            "direction": direction,
+            "volume": float(position.volume),
+            "open_price": float(position.price_open),
+            "current_price": float(position.price_current),
+            "stop_loss": stop_loss,
+            "take_profit": take_profit,
+            "unrealized_profit": float(position.profit),
+            "swap": float(position.swap),
+            "risk_to_stop": risk_to_stop,
+            "opened_at": opened_at.isoformat(),
+        })
+
+    response = client.post(
+        f"{API_BASE}/api/v1/connector/positions",
+        headers={"X-Connector-Token": CONNECTOR_TOKEN},
+        json={
+            "snapshot_at": datetime.now(timezone.utc).isoformat(),
+            "currency": str(info.currency).upper(),
+            "balance": float(info.balance),
+            "equity": float(info.equity),
+            "broker_login": str(info.login),
+            "broker_server": str(info.server or ""),
+            "positions": positions,
+        },
+        timeout=45.0,
+    )
+    if response.status_code >= 400:
+        raise RuntimeError(
+            f"Backend rejected current-position snapshot ({response.status_code}): "
+            f"{response.text[:500]}"
+        )
+    log.info("Current-position snapshot accepted: %s", response.json())
+    return len(positions)
+
+
 def load_sync_checkpoint(now: datetime) -> datetime:
     """Resume from the last fully uploaded time window, with an overlap."""
     try:
@@ -269,14 +337,21 @@ def main() -> None:
     try:
         with httpx.Client() as client:
             while True:
+                # Position telemetry is independent of historical imports so a
+                # long initial backfill does not postpone live-risk snapshots.
+                try:
+                    upload_positions_snapshot(client)
+                except (httpx.HTTPError, RuntimeError, ValueError, OSError) as exc:
+                    log.error("Open-position sync failed; historical sync will still run: %s", exc)
+
                 try:
                     end = datetime.now(timezone.utc)
                     sent = sync_window(client, start, end)
                     save_sync_checkpoint(end)
-                    log.info("Sync complete: %s deals submitted", sent)
+                    log.info("Historical sync complete: %s deals submitted", sent)
                     start = end - timedelta(days=OVERLAP_DAYS)
                 except (httpx.HTTPError, RuntimeError, ValueError, OSError) as exc:
-                    log.error("Sync failed; resuming from last successful checkpoint: %s", exc)
+                    log.error("History sync failed; resuming from last successful checkpoint: %s", exc)
                     start = load_sync_checkpoint(datetime.now(timezone.utc))
                 time.sleep(POLL_SECONDS)
     finally:

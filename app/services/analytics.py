@@ -30,6 +30,7 @@ def _closed_trades(db: Client, account_id: str) -> list[dict]:
         .eq("account_id", account_id)
         .not_.is_("exit_at", "null")
         .order("exit_at")
+        .order("id")
     ))
 
 
@@ -173,6 +174,7 @@ def compute_trading_dna(db: Client, account_id: str, minimum_sample_size: int = 
         .eq("account_id", account_id)
         .not_.is_("exit_at", "null")
         .order("exit_at")
+        .order("id")
     ))
     return summarize_trading_dna(trades, minimum_sample_size)
 
@@ -263,3 +265,171 @@ def compute_performance_breakdown(db: Client, account_id: str) -> dict:
     timezone_name = account.data[0].get("timezone") or "UTC"
     trades = _closed_trades(db, account_id)
     return summarize_performance_breakdown(trades, timezone_name)
+
+
+def summarize_cost_analysis(trades: list[dict], journal_entries: list[dict], currency: str) -> dict:
+    """Evidence-based cost analysis over the full imported closed-trade set."""
+    total_gross = 0.0
+    total_commission = 0.0
+    total_swap = 0.0
+    net_by_symbol: dict[str, dict] = {}
+    net_by_session: dict[str, dict] = {}
+    per_trade: dict[str, dict] = {}
+    spread_values: list[float] = []
+    commission_present = 0
+    swap_present = 0
+
+    def bump(groups: dict[str, dict], key: str, row: dict, gross: float, commission: float, swap: float, net_pl: float) -> None:
+        label = key.strip() if key and key.strip() else "Unknown"
+        group = groups.setdefault(label, {
+            "key": label, "trade_count": 0, "gross_pl": 0.0,
+            "commission_net": 0.0, "swap_net": 0.0, "net_pl": 0.0,
+            "recorded_cost": 0.0,
+        })
+        group["trade_count"] += 1
+        group["gross_pl"] += gross
+        group["commission_net"] += commission
+        group["swap_net"] += swap
+        group["net_pl"] += net_pl
+        group["recorded_cost"] += -(commission + swap)
+
+    for trade in trades:
+        trade_id = str(trade.get("id") or "")
+        gross = float(trade.get("profit") or 0)
+        commission = float(trade.get("commission") or 0)
+        swap = float(trade.get("swap") or 0)
+        net_pl = gross + commission + swap
+        total_gross += gross
+        total_commission += commission
+        total_swap += swap
+        commission_present += int(trade.get("commission") is not None)
+        swap_present += int(trade.get("swap") is not None)
+        spread = trade.get("spread")
+        if spread is not None:
+            try:
+                spread_values.append(float(spread))
+            except (TypeError, ValueError):
+                pass
+        per_trade[trade_id] = {
+            "gross_pl": gross, "commission_net": commission,
+            "swap_net": swap, "net_pl": net_pl,
+        }
+        bump(net_by_symbol, str(trade.get("symbol") or "Unknown").upper(), trade, gross, commission, swap, net_pl)
+        bump(net_by_session, str(trade.get("session") or "Unknown"), trade, gross, commission, swap, net_pl)
+
+    mistake_groups: dict[str, dict] = {}
+    plan_reviewed = 0
+    plan_followed = 0
+    joined_journal_entries = 0
+    for entry in journal_entries:
+        trade_id = str(entry.get("trade_id") or "")
+        trade_metrics = per_trade.get(trade_id)
+        tags = entry.get("mistake_tags") or []
+        if not isinstance(tags, list):
+            tags = []
+        if trade_metrics:
+            joined_journal_entries += 1
+            if entry.get("followed_plan") is not None:
+                plan_reviewed += 1
+                plan_followed += int(bool(entry.get("followed_plan")))
+        for raw_tag in tags:
+            tag = str(raw_tag).strip()
+            if not tag:
+                continue
+            group = mistake_groups.setdefault(tag, {
+                "tag": tag, "tagged_trade_count": 0, "gross_pl": 0.0,
+                "commission_net": 0.0, "swap_net": 0.0, "net_pl": 0.0,
+                "outcome_linked_count": 0,
+            })
+            group["tagged_trade_count"] += 1
+            if trade_metrics:
+                group["outcome_linked_count"] += 1
+                for key in ("gross_pl", "commission_net", "swap_net", "net_pl"):
+                    group[key] += trade_metrics[key]
+
+    def finish_group(group: dict) -> dict:
+        return {
+            **group,
+            "gross_pl": round(group["gross_pl"], 4),
+            "commission_net": round(group["commission_net"], 4),
+            "swap_net": round(group["swap_net"], 4),
+            "net_pl": round(group["net_pl"], 4),
+            "recorded_cost": round(group["recorded_cost"], 4),
+        }
+
+    count = len(trades)
+    commission_cost = -total_commission
+    swap_cost = -total_swap
+    recorded_cost = commission_cost + swap_cost
+    measured_spread_count = len(spread_values)
+    return {
+        "currency": currency,
+        "sample_size": count,
+        "history_scope": "all imported closed trades; broker history completeness is not independently verified",
+        "gross_pl": round(total_gross, 4),
+        "commission_net": round(total_commission, 4),
+        "swap_net": round(total_swap, 4),
+        "commission_cost_signed": round(commission_cost, 4),
+        "swap_cost_signed": round(swap_cost, 4),
+        "recorded_commission_and_swap_cost_signed": round(recorded_cost, 4),
+        "average_recorded_commission_and_swap_cost_per_trade": round(recorded_cost / count, 4) if count else None,
+        "net_pl_after_recorded_commission_and_swap": round(total_gross + total_commission + total_swap, 4),
+        "data_coverage": {
+            "trades": count,
+            "commission_field_present": commission_present,
+            "swap_field_present": swap_present,
+            "spread_field_present": measured_spread_count,
+            "spread_mean_in_source_units": round(sum(spread_values) / measured_spread_count, 8) if measured_spread_count else None,
+            "spread_note": "Spread is shown only as stored in the connector's source units; it is not converted into money because symbol contract/quote metadata is not currently retained with each trade.",
+            "slippage_status": "unmeasured",
+            "slippage_sample_size": 0,
+            "slippage_note": "Expected/reference execution prices and a matching fill benchmark are not stored, so actual slippage cannot be measured honestly.",
+        },
+        "by_symbol": [
+            finish_group(group)
+            for group in sorted(net_by_symbol.values(), key=lambda item: (-item["net_pl"], item["key"]))
+        ],
+        "by_session": [
+            finish_group(group)
+            for group in sorted(net_by_session.values(), key=lambda item: (-item["net_pl"], item["key"]))
+        ],
+        "execution_mistakes": [
+            {
+                **group,
+                "gross_pl": round(group["gross_pl"], 4),
+                "commission_net": round(group["commission_net"], 4),
+                "swap_net": round(group["swap_net"], 4),
+                "net_pl": round(group["net_pl"], 4),
+                "outcome_note": "Outcome metrics include only journal tags matched to an imported trade ID; a tag count may include orphaned annotations.",
+            }
+            for group in sorted(mistake_groups.values(), key=lambda item: (-item["tagged_trade_count"], item["tag"]))
+        ],
+        "journal_coverage": {
+            "annotations_matched_to_trades": joined_journal_entries,
+            "follow_plan_reviewed": plan_reviewed,
+            "follow_plan_counted_as_followed": plan_followed,
+            "follow_plan_adherence_pct": round(plan_followed / plan_reviewed * 100, 2) if plan_reviewed else None,
+            "note": "Mistake and plan tags are user-recorded annotations, not automatically inferred psychological states.",
+        },
+    }
+
+
+def compute_cost_analysis(db: Client, account_id: str) -> dict:
+    account_result = (
+        db.table("trading_accounts")
+        .select("currency")
+        .eq("id", account_id)
+        .limit(1)
+        .execute()
+    )
+    if not account_result.data:
+        raise ValueError("Account not found")
+    trades = _closed_trades(db, account_id)
+    journal_entries = _fetch_all_pages(lambda: (
+        db.table("trade_journal_entries")
+        .select("trade_id,mistake_tags,followed_plan")
+        .eq("account_id", account_id)
+        .order("updated_at")
+        .order("id")
+    ))
+    return summarize_cost_analysis(trades, journal_entries, account_result.data[0].get("currency") or "UNKNOWN")
