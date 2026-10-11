@@ -7,3 +7,4 @@ httpx
 supabase
 pyjwt
 pytest
+metaapi-cloud-sdk==29.1.1

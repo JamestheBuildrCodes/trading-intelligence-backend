@@ -67,3 +67,23 @@ See [docs/supabase-setup.md](docs/supabase-setup.md) for dashboard configuration
 ## MT5 demo connection
 
 See [mt5_bridge/README.md](mt5_bridge/README.md). Connect a demo account first. The bridge only reads account information and deal history; it cannot submit, modify or close trades. Verify totals against MT5 history before relying on analytics.
+
+## Hosted MT5 connections (MetaApi)
+
+TradeGrid can provision an MT5 account on MetaApi and run read-only history/position synchronization from a separate worker. The account form accepts an **investor/read-only password only**. TradeGrid does not persist that password, but the credential is forwarded to MetaApi, which must retain it to maintain the hosted terminal. Do not connect accounts you are not authorized to monitor.
+
+### Required production setup
+1. Create a MetaApi account, review its pricing/region/data-processing terms, and generate an API token with only the access needed for account provisioning and RPC history reads.
+2. Add the token as the server-only Render secret `METAAPI_TOKEN` on the web API service. Never add it as a `NEXT_PUBLIC_` variable or commit it.
+3. Apply `database/migrations/20261011_add_hosted_mt5_connection.sql` to Supabase.
+4. Deploy a separate Render Cron Job from this repository/commit with command `python -m app.workers.hosted_mt5_sync`, environment `METAAPI_TOKEN`, `SUPABASE_URL`, `SUPABASE_SECRET_KEY` (or supported legacy service-role key), and `CONNECTOR_TOKEN_PEPPER`. Test job runtime and timeout with actual history volumes.
+5. Start with an authorized broker demo account. Verify login, server, currency, earliest/latest deals, trade counts, deposits/withdrawals and open positions against MT5 before using this for decisions or marketing hosted support.
+
+Endpoints:
+- `POST /api/v1/accounts/{account_id}/hosted-mt5` provisions a hosted account.
+- `GET /api/v1/accounts/{account_id}/hosted-mt5/status` reports connection state and imported timestamps.
+- `POST /api/v1/accounts/{account_id}/hosted-mt5/disconnect` requests provider deprovisioning.
+
+History sync uses `METAAPI_INITIAL_LOOKBACK_DAYS` (default 10,000), `METAAPI_HISTORY_CHUNK_DAYS` (default 180), and `METAAPI_MAX_HISTORY_CHUNKS_PER_RUN` (default 10). The worker recursively subdivides ranges when a MetaApi request reaches the 1,000-deal response cap. If a one-second range is still saturated, it raises `history_response_limit_reached` and does not advance the cursor past that interval. A completed configured lookback does not prove the broker retained all history; reconcile imported history with the broker statement.
+
+The worker is a separate process and must not run inside the web request handler. If `METAAPI_TOKEN` is not configured, hosted provisioning remains disabled. The existing Windows MT5 bridge remains available as an alternative.

@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     # Keep this stable after issuing connector tokens. Never use a public default.
     connector_token_pepper: str = Field(min_length=32)
     ai_daily_budget_usd: float = 1.0
+    # Optional hosted MT5 provider token. Leave unset to disable cloud connections.
+    metaapi_token: str | None = None
     allowed_origins: str = "http://localhost:3000"
 
     @model_validator(mode="after")
