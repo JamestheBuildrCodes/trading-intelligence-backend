@@ -7,10 +7,12 @@ alter table public.trading_accounts
   add column if not exists hosted_connection_status text not null default 'not_configured',
   add column if not exists hosted_last_error_code text,
   add column if not exists hosted_history_cursor_at timestamptz,
+  add column if not exists hosted_initial_backfill_complete boolean not null default false,
   add column if not exists hosted_first_deal_at timestamptz,
   add column if not exists hosted_last_deal_at timestamptz,
   add column if not exists hosted_connection_verified_at timestamptz,
-  add column if not exists hosted_last_sync_at timestamptz;
+  add column if not exists hosted_last_sync_at timestamptz,
+  add column if not exists hosted_status_updated_at timestamptz;
 
 do $$
 begin
