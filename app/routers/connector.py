@@ -31,6 +31,17 @@ def ingest_deals(
     for position_id in position_ids:
         aggregate_position(db, account_id, position_id)
 
+    imported_cash_flows = 0
+    for cash_flow in batch.cash_flows:
+        flow_row = cash_flow.model_dump(mode="json")
+        flow_row.update({"account_id": account_id, "source": "mt5"})
+        db.table("portfolio_cash_flows").upsert(
+            flow_row,
+            on_conflict="account_id,external_id",
+            ignore_duplicates=True,
+        ).execute()
+        imported_cash_flows += 1
+
     account_update = {
         "connection_status": "connected",
         "last_sync_at": datetime.now(timezone.utc).isoformat(),
@@ -59,4 +70,4 @@ def ingest_deals(
             on_conflict="account_id,snapshot_date",
         ).execute()
 
-    return {"received": len(batch.deals), "positions_recomputed": len(position_ids), "snapshot_recorded": batch.balance is not None and batch.equity is not None}
+    return {"received": len(batch.deals), "positions_recomputed": len(position_ids), "cash_flows_received": imported_cash_flows, "snapshot_recorded": batch.balance is not None and batch.equity is not None}
