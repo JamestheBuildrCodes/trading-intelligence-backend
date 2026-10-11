@@ -5,6 +5,7 @@ from app.db import get_supabase
 from app.deps import require_account_owner
 from app.schemas import OverviewOut, TradeOut
 from app.services.analytics import compute_cost_analysis, compute_overview, compute_performance_breakdown, compute_trading_dna
+from app.services.entitlements import require_account_feature
 
 router = APIRouter(prefix="/api/v1/accounts", tags=["overview"])
 
@@ -58,6 +59,7 @@ def get_cost_analysis(
     db: Client = Depends(get_supabase),
 ):
     """Return cost and self-reported execution-review metrics over all imported history."""
+    require_account_feature(db, account_id, "advanced_cost_analysis")
     return compute_cost_analysis(db, account_id)
 
 
