@@ -60,7 +60,7 @@ async def connect_hosted_mt5(
             "password": body.investor_password,
             "server": body.server,
             "platform": "mt5",
-            "application": "TradeGrid",
+            "application": "MetaApi",
             "magic": 730041,
             "reliability": "high",
         })
