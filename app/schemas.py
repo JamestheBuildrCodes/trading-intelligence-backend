@@ -84,8 +84,24 @@ class DealIn(BaseModel):
         return value
 
 
+class ConnectorCashFlowIn(BaseModel):
+    external_id: str = Field(min_length=1, max_length=100)
+    flow_type: Literal["deposit", "withdrawal"]
+    amount: float = Field(gt=0, allow_inf_nan=False)
+    occurred_at: datetime
+    note: str = Field(default="", max_length=500)
+
+    @field_validator("occurred_at")
+    @classmethod
+    def require_connector_cash_flow_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("occurred_at must include a timezone offset")
+        return value
+
+
 class DealBatchIn(BaseModel):
     deals: list[DealIn] = Field(max_length=1000)
+    cash_flows: list[ConnectorCashFlowIn] = Field(default_factory=list, max_length=1000)
     balance: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     equity: float | None = Field(default=None, ge=0, allow_inf_nan=False)
 
@@ -173,6 +189,8 @@ class CashFlowOut(BaseModel):
     amount: float
     occurred_at: datetime
     note: str = ""
+    source: Literal["manual", "mt5"] = "manual"
+    external_id: str | None = None
     created_at: datetime
 
 
