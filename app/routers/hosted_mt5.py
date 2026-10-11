@@ -83,7 +83,7 @@ async def connect_hosted_mt5(
     account_id: str = Depends(require_account_owner),
     db: Client = Depends(get_supabase),
 ):
-    """Provision an MT5 account on MetaApi. The investor password is never persisted by TradeGrid."""
+    """Provision an MT5 account on MetaApi. The investor password is never persisted by Tradvoryx."""
     current = _account_row(db, account_id)
     require_account_feature(db, account_id, "hosted_mt5")
     # Provisioning must not depend on a successful worker heartbeat: the first
@@ -93,7 +93,7 @@ async def connect_hosted_mt5(
     if current.get("connection_provider") == "metaapi" and current.get("provider_account_id"):
         raise HTTPException(
             status_code=409,
-            detail="This TradeGrid account already has a hosted provider connection. Refresh its status or disconnect it before reconnecting.",
+            detail="This Tradvoryx account already has a hosted provider connection. Refresh its status or disconnect it before reconnecting.",
         )
 
     token = _provider_token()
@@ -102,7 +102,7 @@ async def connect_hosted_mt5(
 
         api = MetaApi(token)
         remote = await api.metatrader_account_api.create_account({
-            "name": f"TradeGrid · {current.get('label') or 'MT5 account'}",
+            "name": f"Tradvoryx · {current.get('label') or 'MT5 account'}",
             "type": "cloud",
             "login": body.login,
             "password": body.investor_password,
@@ -125,7 +125,7 @@ async def connect_hosted_mt5(
                     if safe_code == "E_AUTH"
                     else "The provider could not identify this broker server. Check the exact MT5 server name or ask support about a provisioning profile."
                     if safe_code == "E_SRV_NOT_FOUND"
-                    else "Hosted MT5 provisioning did not complete. Verify the broker server and try again; no password was saved in TradeGrid."
+                    else "Hosted MT5 provisioning did not complete. Verify the broker server and try again; no password was saved in Tradvoryx."
                 ),
             },
         ) from None
@@ -154,7 +154,7 @@ async def connect_hosted_mt5(
             await remote.remove()
         except Exception:
             pass
-        raise HTTPException(status_code=500, detail="The hosted account was created by the provider but TradeGrid could not save its connection state. Contact support before retrying.") from None
+        raise HTTPException(status_code=500, detail="The hosted account was created by the provider but Tradvoryx could not save its connection state. Contact support before retrying.") from None
 
     return {
         "account_id": account_id,
@@ -191,7 +191,7 @@ def hosted_mt5_status(
         "verified_at": row.get("hosted_connection_verified_at"),
         "last_sync_at": row.get("hosted_last_sync_at"),
         "message": (
-            "This account uses hosted MT5. TradeGrid's browser does not need your desktop terminal."
+            "This account uses hosted MT5. Tradvoryx's browser does not need your desktop terminal."
             if row.get("connection_provider") == "metaapi" and row.get("provider_account_id")
             else "No hosted MT5 connection is configured for this account."
         ),

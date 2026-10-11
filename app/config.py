@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     paystack_trader_yearly_plan_code: str | None = None
     paystack_pro_monthly_plan_code: str | None = None
     paystack_pro_yearly_plan_code: str | None = None
-    app_base_url: str = "https://trading-intelligence-ashy.vercel.app"
+    app_base_url: str = "https://tradvoryx.vercel.app"
     allowed_origins: str = "http://localhost:3000"
 
     @model_validator(mode="after")
@@ -50,8 +50,9 @@ class Settings(BaseSettings):
         ]
         # Keep the deployed dashboard able to call the API even if the Render
         # environment variable still contains only the local development origin.
-        production_dashboard = "https://trading-intelligence-ashy.vercel.app"
-        return list(dict.fromkeys([*configured, production_dashboard]))
+        production_dashboard = "https://tradvoryx.vercel.app"
+        legacy_dashboard = "https://trading-intelligence-ashy.vercel.app"
+        return list(dict.fromkeys([*configured, production_dashboard, legacy_dashboard]))
 
 
 @lru_cache

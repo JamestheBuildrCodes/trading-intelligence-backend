@@ -1,4 +1,4 @@
-"""Normalize MetaApi RPC payloads to TradeGrid's existing MT5 deal schema.
+"""Normalize MetaApi RPC payloads to Tradvoryx's existing MT5 deal schema.
 
 This adapter is read-only. It never calls any trade execution methods.
 """
