@@ -99,7 +99,7 @@ The GitHub integration cannot read or create Actions secret values. Do not paste
 2. Confirm the account's hosted provider connection is saved and its status is not disconnected. The importer refuses to process the target unless the submitted account UUID points to a configured MetaApi provider account, includes a login/server, and identifies Headway REAL/LIVE (not demo).
 3. Open the [backend repository Actions tab](https://github.com/JamestheBuildrCodes/trading-intelligence-backend/actions).
 4. Select **Hosted MT5 historical import (manual)** and choose **Run workflow**.
-5. Enter the exact UUID of the Headway-Real row from Supabase public.trading_accounts (the existing My main row was observed as c5688758-a78a-482e-aae7-ceb782c0984a during the last audit, but verify the row still represents the account you intend to import).
+5. Enter the exact UUID of the new Headway-Real row from Supabase public.trading_accounts. The latest production database check found only one demo account and no Headway live profile, so create the real profile first; do not select the demo row.
 6. Tick the explicit confirmation that this is the Headway real/live account. Choose 10 chunks for the first run, then start the workflow.
 
 The workflow runs Python 3.11, installs requirements.txt, runs the backend pytest suite, checks the worker CLI, then invokes the existing worker as follows (the actual UUID and chunk count are passed from workflow inputs):
