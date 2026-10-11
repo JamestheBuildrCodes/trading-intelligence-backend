@@ -72,3 +72,31 @@ def test_cancelled_or_past_due_subscription_does_not_grant_paid_entitlements():
     assert result["plan"] == "free"
     assert result["paid"] is False
     assert result["entitlements"] == PLAN_ENTITLEMENTS["free"]
+
+from datetime import datetime, timedelta, timezone
+
+
+def test_billing_period_clamps_end_of_month_safely():
+    from app.routers.billing import _add_billing_period
+    assert _add_billing_period(datetime(2026, 1, 31, tzinfo=timezone.utc), "monthly") == datetime(2026, 2, 28, tzinfo=timezone.utc)
+    assert _add_billing_period(datetime(2028, 2, 29, tzinfo=timezone.utc), "yearly") == datetime(2029, 2, 28, tzinfo=timezone.utc)
+
+
+def test_active_subscription_without_valid_period_end_does_not_grant_paid_access():
+    class Query:
+        def select(self, _columns): return self
+        def eq(self, _column, _value): return self
+        def limit(self, _limit): return self
+        def execute(self):
+            return SimpleNamespace(data=[{
+                "plan": "pro",
+                "status": "active",
+                "billing_period": "monthly",
+                "current_period_end": None,
+                "cancel_at_period_end": False,
+            }])
+    class DB:
+        def table(self, _name): return Query()
+    result = get_user_entitlements(DB(), "user-1")
+    assert result["plan"] == "free"
+    assert result["paid"] is False
