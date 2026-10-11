@@ -229,7 +229,7 @@ def _apply_verified_charge(db: Client, reference: str, secret: str, event_data: 
     subscription_row = _find_subscription_for_payment(db, provider_subscription_code, customer_code)
     if subscription_row is None:
         if not provider_subscription_code and not customer_code:
-            # Signed but unrelated Paystack charge; it cannot grant TradeGrid access.
+            # Signed but unrelated Paystack charge; it cannot grant Tradvoryx access.
             return
         raise RuntimeError("recurring_subscription_not_linked")
 
@@ -376,7 +376,7 @@ def start_checkout(body: CheckoutRequest, user: CurrentUser = Depends(get_curren
         "reference": reference,
         "callback_url": settings.app_base_url.rstrip("/") + "/settings?billing=return",
         "metadata": {
-            "product": "TradeGrid",
+            "product": "Tradvoryx",
             "user_id": user.id,
             "plan": body.plan,
             "billing_period": body.billing_period,
