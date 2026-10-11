@@ -35,6 +35,10 @@ class CheckoutRequest(BaseModel):
     billing_period: str = Field(pattern="^(monthly|yearly)$")
 
 
+class DeveloperPreviewRequest(BaseModel):
+    plan: str = Field(pattern="^(free|trader|pro|enterprise)$")
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -344,8 +348,24 @@ def billing_status(user: CurrentUser = Depends(get_current_user), db: Client = D
     }
 
 
+@router.post("/developer/preview")
+def set_developer_preview(body: DeveloperPreviewRequest, user: CurrentUser = Depends(get_current_user), db: Client = Depends(get_supabase)):
+    """Change the effective plan only for an account explicitly allowlisted by a migration."""
+    current = _current_subscription(db, user.id)
+    if not current or not current.get("developer_access"):
+        raise HTTPException(status_code=403, detail="Developer preview is not enabled for this account.")
+    db.table("user_subscriptions").update({
+        "developer_preview_plan": body.plan,
+        "updated_at": _now(),
+    }).eq("user_id", user.id).eq("developer_access", True).execute()
+    return get_user_entitlements(db, user.id)
+
+
 @router.post("/checkout")
 def start_checkout(body: CheckoutRequest, user: CurrentUser = Depends(get_current_user), db: Client = Depends(get_supabase)):
+    current = get_user_entitlements(db, user.id)
+    if current.get("developer_access"):
+        raise HTTPException(status_code=403, detail="Developer accounts are exempt from paid checkout.")
     if not user.email or not user.email_verified:
         raise HTTPException(status_code=422, detail="Verify your email address before starting paid checkout.")
     current = get_user_entitlements(db, user.id)
