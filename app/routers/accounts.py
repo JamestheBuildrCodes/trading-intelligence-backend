@@ -5,7 +5,7 @@ from supabase import Client
 
 from app.db import get_supabase
 from app.deps import CurrentUser, get_current_user, require_account_owner
-from app.schemas import AccountCreate, AccountOut, ConnectorTokenOut
+from app.schemas import AccountCreate, AccountOut, AccountSettingsUpdate, ConnectorTokenOut
 from app.security import generate_connector_token
 
 router = APIRouter(prefix="/api/v1/accounts", tags=["accounts"])
@@ -33,6 +33,30 @@ def create_account(
     result = db.table("trading_accounts").insert(row).execute()
     return result.data[0]
 
+
+
+@router.patch("/{account_id}", response_model=AccountOut)
+def update_account_settings(
+    body: AccountSettingsUpdate,
+    account_id: str = Depends(require_account_owner),
+    db: Client = Depends(get_supabase),
+):
+    """Update account label, timezone and advisory risk preferences."""
+    updates = body.model_dump(exclude_unset=True, exclude_none=True)
+    if not updates:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="Provide at least one setting to update.")
+
+    result = (
+        db.table("trading_accounts")
+        .update(updates)
+        .eq("id", account_id)
+        .execute()
+    )
+    if not result.data:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Account not found.")
+    return result.data[0]
 
 @router.post("/{account_id}/connector-tokens", response_model=ConnectorTokenOut)
 def create_connector_token(
