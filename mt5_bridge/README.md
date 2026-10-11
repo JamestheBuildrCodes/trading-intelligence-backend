@@ -22,7 +22,7 @@ Copy-Item .env.example .env
 
 ## Reliability notes
 
-- Initial history lookback defaults to 30 days; later runs use an overlapping window. Backend uniqueness on account + MT5 deal ID is intended to make retries idempotent.
+- Initial history lookback defaults to 30 days; later runs use an overlapping window. Trade deals and MT5 balance operations are sent in the same sync. Cash movements are de-duplicated by account + MT5 deal ticket, and daily equity/balance snapshots are refreshed on successful syncs.\n- Positive MT5 balance operations are classified as deposits and negative ones as withdrawals. Some brokers use balance operations for corrections or bonuses too; review imported entries and correct the classification manually where needed. Do not manually enter a movement already imported.
 - The bridge requires a logged-in terminal. It does not validate the broker/account identity against dashboard metadata yet; verify the connected login, broker server and account currency in the logs and reconcile them manually before relying on the data.
 - The current schema does not faithfully represent netting reversals (`DEAL_ENTRY_INOUT`); such positions are skipped by trade aggregation to avoid misleading metrics. Full netting support is a required follow-up.
 - The deployed backend must have the current schema and environment variables configured before running this bridge.
