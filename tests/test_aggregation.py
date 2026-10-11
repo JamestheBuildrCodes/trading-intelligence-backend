@@ -46,6 +46,7 @@ class FakeDB:
 
 def deal(deal_id, entry, direction, volume, price, time, profit=0):
     return {
+        "account_id": "account-1",
         "mt5_deal_id": deal_id,
         "mt5_position_id": "position-1",
         "entry_type": entry,
