@@ -377,8 +377,9 @@ async def run_once() -> None:
                 succeeded += 1
             else:
                 failed += 1
-        status = "partial" if failed and succeeded else "failed" if failed else "succeeded"
-        safe_error = "one_or_more_accounts_failed" if failed else None
+        if rows:
+            status = "partial" if failed and succeeded else "failed" if failed else "succeeded"
+            safe_error = "one_or_more_accounts_failed" if failed else None
         log.info(
             "Hosted MT5 worker run finished status=%s accounts_seen=%s accounts_succeeded=%s accounts_failed=%s",
             status, len(rows), succeeded, failed,
