@@ -298,3 +298,23 @@ class RiskPositionOut(BaseModel):
     swap: float
     risk_to_stop: float | None
     opened_at: datetime
+
+
+class HostedMt5ConnectIn(BaseModel):
+    login: str = Field(min_length=1, max_length=80)
+    server: str = Field(min_length=1, max_length=150)
+    investor_password: str = Field(min_length=1, max_length=200)
+    acknowledge_cloud_storage: Literal[True]
+
+    @field_validator("login", "server")
+    @classmethod
+    def strip_hosted_account_fields(cls, value: str) -> str:
+        return value.strip()
+
+
+class HostedMt5ConnectOut(BaseModel):
+    account_id: str
+    provider: Literal["metaapi"]
+    status: Literal["provisioning", "connecting", "connected", "error", "disconnected"]
+    provider_account_id: str | None = None
+    message: str
