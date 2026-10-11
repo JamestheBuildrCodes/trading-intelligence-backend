@@ -8,6 +8,7 @@ MetaApi at account provisioning time; TradeGrid never stores them.
 """
 from __future__ import annotations
 
+import argparse
 import asyncio
 import logging
 import os
@@ -27,7 +28,7 @@ log = logging.getLogger("tradegrid.hosted_mt5")
 
 INITIAL_LOOKBACK_DAYS = max(365, int(os.getenv("METAAPI_INITIAL_LOOKBACK_DAYS", "10000")))
 HISTORY_CHUNK_DAYS = max(1, int(os.getenv("METAAPI_HISTORY_CHUNK_DAYS", "180")))
-MAX_HISTORY_CHUNKS_PER_RUN = max(1, int(os.getenv("METAAPI_MAX_HISTORY_CHUNKS_PER_RUN", "10")))
+MAX_HISTORY_CHUNKS_PER_RUN = max(1, min(50, int(os.getenv("METAAPI_MAX_HISTORY_CHUNKS_PER_RUN", "10"))))
 INCREMENTAL_OVERLAP_DAYS = max(1, int(os.getenv("METAAPI_SYNC_OVERLAP_DAYS", "2")))
 POSITION_SNAPSHOT_STALE_SECONDS = max(60, int(os.getenv("METAAPI_POSITION_SNAPSHOT_MAX_AGE_SECONDS", "300")))
 
@@ -62,6 +63,31 @@ def _safe_status_error(db: Client, account_id: str, code: str) -> None:
     db.table("trading_accounts").update({"connection_status": "error"}).eq("id", account_id).execute()
 
 
+def _validate_headway_live_account(row: dict, expected_account_id: str) -> None:
+    """Reject every account except the explicitly selected hosted Headway live profile."""
+    if str(row.get("id") or "") != expected_account_id:
+        raise ValueError("target_account_id_mismatch")
+    if str(row.get("connection_provider") or "").lower() != "metaapi":
+        raise ValueError("target_account_not_hosted")
+    if not str(row.get("provider_account_id") or "").strip():
+        raise ValueError("provider_account_id_missing")
+    status = str(row.get("hosted_connection_status") or "").lower()
+    if status == "disconnected":
+        raise ValueError("target_account_disconnected")
+    if status not in {"not_configured", "provisioning", "connecting", "connected", "syncing", "error"}:
+        raise ValueError("target_account_status_invalid")
+    broker = str(row.get("broker") or "").strip().lower()
+    server = str(row.get("server") or "").strip().lower()
+    account_type = str(row.get("account_type") or "").strip().lower()
+    if account_type == "demo" or "demo" in server or "demo" in broker:
+        raise ValueError("demo_accounts_are_not_allowed")
+    if "headway" not in (broker + " " + server):
+        raise ValueError("target_account_is_not_headway")
+    if not any(marker in server for marker in ("real", "live")):
+        raise ValueError("target_account_is_not_live")
+    if not str(row.get("mt5_login") or "").strip() or not server:
+        raise ValueError("target_account_identity_missing")
+
 def _latest_position_snapshot(db: Client, account_id: str) -> dict | None:
     result = (
         db.table("mt5_position_snapshots")
@@ -88,23 +114,67 @@ def _upload_cash_flows(db: Client, account_id: str, cash_flows: list[dict[str, A
             ).execute()
 
 
-def _upload_deals(db: Client, account_id: str, deals: list[dict[str, Any]]) -> int:
+def _upload_deals(db: Client, account_id: str, deals: list[dict[str, Any]]) -> dict[str, int]:
+    """Write deals idempotently in bounded batches and report existing/duplicate IDs."""
+    seen_ids: set[str] = set()
+    unique_deals: list[dict[str, Any]] = []
+    duplicate_input_count = 0
+    for deal in deals:
+        deal_id = str(deal.get("mt5_deal_id") or "").strip()
+        if not deal_id:
+            raise ValueError("provider_deal_id_missing")
+        if deal_id in seen_ids:
+            duplicate_input_count += 1
+            continue
+        seen_ids.add(deal_id)
+        unique_deals.append(deal)
     position_ids: set[str] = set()
-    for offset in range(0, len(deals), 1000):
+    inserted_estimate = 0
+    already_present = 0
+    batch_size = 500
+    total_batches = (len(unique_deals) + batch_size - 1) // batch_size
+    for offset in range(0, len(unique_deals), batch_size):
+        batch_number = offset // batch_size + 1
+        source_batch = unique_deals[offset:offset + batch_size]
+        ids = [str(deal["mt5_deal_id"]) for deal in source_batch]
+        existing_result = (
+            db.table("raw_deals")
+            .select("mt5_deal_id")
+            .eq("account_id", account_id)
+            .in_("mt5_deal_id", ids)
+            .execute()
+        )
+        existing_ids = {
+            str(item["mt5_deal_id"]) for item in (existing_result.data or [])
+            if item.get("mt5_deal_id") is not None
+        }
+        already_present += len(existing_ids)
+        inserted_estimate += len(ids) - len(existing_ids)
         batch = []
-        for deal in deals[offset:offset + 1000]:
+        for deal in source_batch:
             row = dict(deal)
             row["account_id"] = account_id
             row["raw_payload"] = dict(deal)
             batch.append(row)
             position_ids.add(str(deal["mt5_position_id"]))
-        if batch:
-            db.table("raw_deals").upsert(
-                batch, on_conflict="account_id,mt5_deal_id", ignore_duplicates=True
-            ).execute()
-    for position_id in position_ids:
+        db.table("raw_deals").upsert(
+            batch, on_conflict="account_id,mt5_deal_id", ignore_duplicates=True
+        ).execute()
+        log.info(
+            "History write batch %d/%d: deals_in_batch=%d existing_before_write=%d new_id_estimate=%d",
+            batch_number, total_batches, len(batch), len(existing_ids), len(ids) - len(existing_ids),
+        )
+    for index, position_id in enumerate(sorted(position_ids), start=1):
         aggregate_position(db, account_id, position_id)
-    return len(position_ids)
+        if index % 100 == 0 or index == len(position_ids):
+            log.info("Position aggregation progress: positions_checked=%d/%d", index, len(position_ids))
+    return {
+        "unique_deals": len(unique_deals),
+        "duplicate_input_ids": duplicate_input_count,
+        "already_present": already_present,
+        "new_id_estimate": inserted_estimate,
+        "positions_reconciled": len(position_ids),
+    }
 
 
 def _write_position_snapshot(
