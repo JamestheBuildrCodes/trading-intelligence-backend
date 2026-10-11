@@ -7,60 +7,27 @@ from fastapi import HTTPException
 from supabase import Client
 
 PLAN_ENTITLEMENTS: dict[str, dict[str, Any]] = {
-    "free": {
-        "max_accounts": 1,
-        "full_history_analytics": True,
-        "advanced_cost_analysis": False,
-        "portfolio_risk": False,
-        "prop_firm_cockpit": False,
-        "hosted_mt5": False,
-        "ai_coach_monthly_messages": 0,
-    },
-    "trader": {
-        "max_accounts": 3,
-        "full_history_analytics": True,
-        "advanced_cost_analysis": True,
-        "portfolio_risk": False,
-        "prop_firm_cockpit": True,
-        "hosted_mt5": False,
-        "ai_coach_monthly_messages": 0,
-    },
-    "pro": {
-        "max_accounts": 10,
-        "full_history_analytics": True,
-        "advanced_cost_analysis": True,
-        "portfolio_risk": True,
-        "prop_firm_cockpit": True,
-        "hosted_mt5": True,
-        "ai_coach_monthly_messages": 0,
-    },
-    "enterprise": {
-        "max_accounts": None,
-        "full_history_analytics": True,
-        "advanced_cost_analysis": True,
-        "portfolio_risk": True,
-        "prop_firm_cockpit": True,
-        "hosted_mt5": True,
-        "ai_coach_monthly_messages": None,
-    },
+    "free": {"max_accounts": 1, "full_history_analytics": True, "advanced_cost_analysis": False, "portfolio_risk": False, "prop_firm_cockpit": False, "hosted_mt5": False, "ai_coach_monthly_messages": 0},
+    "trader": {"max_accounts": 3, "full_history_analytics": True, "advanced_cost_analysis": True, "portfolio_risk": False, "prop_firm_cockpit": True, "hosted_mt5": False, "ai_coach_monthly_messages": 0},
+    "pro": {"max_accounts": 10, "full_history_analytics": True, "advanced_cost_analysis": True, "portfolio_risk": True, "prop_firm_cockpit": True, "hosted_mt5": True, "ai_coach_monthly_messages": 0},
+    "enterprise": {"max_accounts": None, "full_history_analytics": True, "advanced_cost_analysis": True, "portfolio_risk": True, "prop_firm_cockpit": True, "hosted_mt5": True, "ai_coach_monthly_messages": None},
 }
 
 
 def get_user_entitlements(db: Client, user_id: str) -> dict[str, Any]:
-    """Resolve entitlements only from server-owned subscription state."""
+    """Resolve subscription entitlements and the server-owned developer override."""
     response = (
         db.table("user_subscriptions")
-        .select("plan,status,billing_period,current_period_end,cancel_at_period_end")
+        .select("plan,status,billing_period,current_period_end,cancel_at_period_end,developer_access,developer_preview_plan")
         .eq("user_id", user_id)
         .limit(1)
         .execute()
     )
     row = response.data[0] if response.data else None
+    developer_access = bool(row and row.get("developer_access"))
     paid = bool(row and row.get("status") in ("active", "trialing"))
     period_end = row.get("current_period_end") if row else None
     if paid:
-        # Paid access must have a valid, future billing boundary. Missing or
-        # malformed period-end data must never grant indefinite entitlements.
         if not period_end:
             paid = False
         else:
@@ -72,27 +39,35 @@ def get_user_entitlements(db: Client, user_id: str) -> dict[str, Any]:
                     paid = False
             except (ValueError, TypeError):
                 paid = False
-    plan = str(row.get("plan") or "free") if paid and row else "free"
+
+    plan = str(row.get("developer_preview_plan") or "enterprise") if developer_access else (
+        str(row.get("plan") or "free") if paid and row else "free"
+    )
     if plan not in PLAN_ENTITLEMENTS:
         plan = "free"
+
+    if developer_access:
+        subscription_status = "developer"
+    elif row and not paid and row.get("status") in ("active", "trialing"):
+        subscription_status = "expired"
+    else:
+        subscription_status = row.get("status") if row else "inactive"
+
     return {
         "plan": plan,
-        "subscription_status": ("expired" if row and not paid and row.get("status") in ("active", "trialing") else row.get("status")) if row else "inactive",
-        "billing_period": row.get("billing_period") if paid and row else None,
-        "current_period_end": row.get("current_period_end") if paid and row else None,
-        "cancel_at_period_end": bool(row.get("cancel_at_period_end")) if paid and row else False,
-        "paid": paid,
+        "subscription_status": subscription_status,
+        "billing_period": row.get("billing_period") if paid and row and not developer_access else None,
+        "current_period_end": row.get("current_period_end") if paid and row and not developer_access else None,
+        "cancel_at_period_end": bool(row.get("cancel_at_period_end")) if paid and row and not developer_access else False,
+        "paid": paid and not developer_access,
+        "developer_access": developer_access,
+        "developer_preview_plan": plan if developer_access else None,
         "entitlements": dict(PLAN_ENTITLEMENTS[plan]),
     }
 
 
 def require_account_feature(db: Client, account_id: str, feature: str) -> dict[str, Any]:
-    """Enforce a plan entitlement at the backend boundary for an owned account.
-
-    Callers must still use require_account_owner on the same endpoint first;
-    this helper also checks existence so it can never infer ownership from a
-    client-supplied account UUID alone.
-    """
+    """Enforce a plan entitlement at the backend boundary for an owned account."""
     result = (
         db.table("trading_accounts")
         .select("id,user_id")
