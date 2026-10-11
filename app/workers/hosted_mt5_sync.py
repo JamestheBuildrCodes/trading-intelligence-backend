@@ -193,7 +193,7 @@ async def _sync_one(api: MetaApi, db: Client, row: dict, now: datetime) -> None:
     try:
         remote = await api.metatrader_account_api.get_account(provider_id)
         provider_state = str(getattr(remote, "state", "") or "").upper()
-        if provider_state not in {"DEPLOYED", "CONNECTED", "DEPLOYING"}:
+        if not any(state in provider_state for state in ("DEPLOYED", "CONNECTED", "DEPLOYING")):
             await remote.deploy()
         db.table("trading_accounts").update({
             "hosted_connection_status": "connecting",
@@ -238,6 +238,7 @@ async def _sync_one(api: MetaApi, db: Client, row: dict, now: datetime) -> None:
         first_deal = _time(row.get("hosted_first_deal_at"))
         last_deal = _time(row.get("hosted_last_deal_at"))
         chunks_done = 0
+        deals_uploaded_total = 0
 
         while cursor < now and chunks_done < MAX_HISTORY_CHUNKS_PER_RUN:
             window_end = min(cursor + timedelta(days=HISTORY_CHUNK_DAYS), now)
@@ -276,6 +277,7 @@ async def _sync_one(api: MetaApi, db: Client, row: dict, now: datetime) -> None:
                     cash_flows.append(flow)
             _upload_cash_flows(db, account_id, cash_flows)
             _upload_deals(db, account_id, normalized_deals)
+            deals_uploaded_total += len(normalized_deals)
             if observed_times:
                 first_observed = min(observed_times)
                 last_observed = max(observed_times)
@@ -311,7 +313,7 @@ async def _sync_one(api: MetaApi, db: Client, row: dict, now: datetime) -> None:
         }).eq("id", account_id).execute()
         log.info(
             "Hosted MT5 sync account_id=%s status=%s chunks=%s normalized_deals=%s positions=%s backfill_complete=%s",
-            account_id, final_status, chunks_done, 0, len(positions or []), complete,
+            account_id, final_status, chunks_done, deals_uploaded_total, len(positions or []), complete,
         )
     except Exception as exc:
         exc_code = str(exc) if str(exc) in {
