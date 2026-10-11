@@ -15,7 +15,7 @@ This is a one-time setup. You do not need to write application code or send cred
 3. Click Run.
 4. Check Table Editor; you should see trading_accounts, connector_tokens, raw_deals, and trades.
 
-The script is designed to be re-runnable for the initial schema. Browser-side authenticated users can read only their own account/deal/trade records; account writes and balance/sync-status updates must go through FastAPI. If you previously ran an earlier version of this schema that created account write policies, also run `database/migrations/20261010_lock_down_account_writes.sql` in the SQL Editor. For later schema changes, use a new migration instead of editing production data by hand.
+The script is designed to be re-runnable for the initial schema. Browser-side authenticated users can read only their own account/deal/trade records; account writes and balance/sync-status updates must go through FastAPI. If you previously ran an earlier version of this schema that created account write policies, also run `database/migrations/20261010_lock_down_account_writes.sql` in the SQL Editor. For later schema changes, use a new migration instead of editing production data by hand. To enable persistent journal reviews, also run `database/migrations/20261011_add_trade_journal_entries.sql` after the `trades` table exists. It creates `trade_journal_entries` with RLS enabled and no browser access policies; journal reads/writes go through FastAPI after account ownership and trade-to-account checks.
 
 ## 3. Configure email authentication and redirect URLs
 
