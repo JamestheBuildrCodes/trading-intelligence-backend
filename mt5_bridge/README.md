@@ -1,12 +1,12 @@
-# Trading Intelligence MT5 Python Bridge (read-only)
+# Tradvoryx MT5 Python Bridge (read-only)
 
-This Windows sidecar connects an already logged-in MetaTrader 5 terminal to the Trading Intelligence backend. It reads account metrics and historical deals only. It does not contain trade execution functions and must not be represented as a native MT5 EA.
+This Windows sidecar connects an already logged-in MetaTrader 5 terminal to the Tradvoryx backend. It reads account metrics and historical deals only. It does not contain trade execution functions and must not be represented as a native MT5 EA.
 
 ## Requirements and demo-first workflow
 
 1. Use Windows with a compatible 64-bit Python installation and the MetaTrader 5 desktop terminal.
 2. Open MT5 and log in to the intended **demo account**. Confirm history is available.
-3. Create an account in Trading Intelligence.
+3. Create an account in Tradvoryx.
 4. Using a valid Supabase user access token, call `POST /api/v1/accounts/{account_id}/connector-tokens`. The raw token is returned once only. Save it securely; never put it in Git.
 5. In this directory, run:
 
