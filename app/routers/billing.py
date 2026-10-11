@@ -471,16 +471,36 @@ async def paystack_webhook(request: Request, db: Client = Depends(get_supabase))
         elif event_type == "subscription.create":
             _link_subscription_event(db, data)
         elif event_type in ("subscription.disable", "invoice.payment_failed"):
-            code = str(data.get("subscription_code") or data.get("subscription", {}).get("subscription_code") if isinstance(data.get("subscription"), dict) else data.get("subscription_code") or "")
+            nested_subscription = data.get("subscription") if isinstance(data.get("subscription"), dict) else {}
+            code = str(data.get("subscription_code") or nested_subscription.get("subscription_code") or "")
             row = _find_subscription_by_code(db, code)
             if row:
-                new_status = "cancelled" if event_type == "subscription.disable" else "past_due"
-                db.table("user_subscriptions").update({
-                    "status": new_status,
-                    "cancel_at_period_end": event_type == "subscription.disable",
-                    "last_event_at": _now(),
-                    "updated_at": _now(),
-                }).eq("user_id", row["user_id"]).execute()
+                if event_type == "subscription.disable":
+                    end = (
+                        _parse_provider_datetime(data.get("next_payment_date"))
+                        or _parse_provider_datetime(nested_subscription.get("next_payment_date"))
+                        or _parse_provider_datetime(row.get("current_period_end"))
+                    )
+                    # Stop renewal immediately, but preserve already-paid access
+                    # through the stored period end when Paystack supplies one.
+                    paid_through_end = bool(end and end > datetime.now(timezone.utc))
+                    new_status = "active" if paid_through_end else "cancelled"
+                    update = {
+                        "status": new_status,
+                        "cancel_at_period_end": paid_through_end,
+                        "last_event_at": _now(),
+                        "updated_at": _now(),
+                    }
+                    if end:
+                        update["current_period_end"] = end.isoformat()
+                else:
+                    update = {
+                        "status": "past_due",
+                        "cancel_at_period_end": False,
+                        "last_event_at": _now(),
+                        "updated_at": _now(),
+                    }
+                db.table("user_subscriptions").update(update).eq("user_id", row["user_id"]).execute()
         elif event_type == "subscription.not_renew":
             code = str(data.get("subscription_code") or "")
             row = _find_subscription_by_code(db, code)
