@@ -71,3 +71,63 @@ def test_open_position_mapping_leaves_risk_unknown_without_money_calculator():
 def test_provider_times_are_normalized_to_utc():
     parsed = parse_provider_time("2026-10-11T12:00:00+02:00")
     assert parsed == datetime(2026, 10, 11, 10, 0, tzinfo=timezone.utc)
+
+
+import asyncio
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+from app.services.metaapi_adapter import fetch_all_deals_for_range
+
+
+def test_fetch_all_deals_splits_saturated_ranges_without_dropping_records():
+    start = datetime(2026, 1, 1)
+    end = start + timedelta(hours=24)
+    total = 2501
+    deals = []
+    for index in range(total):
+        instant = start.replace(tzinfo=timezone.utc) + timedelta(seconds=index * 30)
+        deals.append({
+            "id": f"deal-{index:04d}",
+            "time": instant.isoformat(),
+            "type": "DEAL_TYPE_BUY",
+        })
+
+    class FakeRpcConnection:
+        async def get_deals_by_time_range(self, start_time, end_time):
+            start_utc = start_time.replace(tzinfo=timezone.utc) if start_time.tzinfo is None else start_time.astimezone(timezone.utc)
+            end_utc = end_time.replace(tzinfo=timezone.utc) if end_time.tzinfo is None else end_time.astimezone(timezone.utc)
+            matched = [
+                deal for deal in deals
+                if start_utc <= parse_provider_time(deal["time"]) < end_utc
+            ]
+            return matched[:1000]
+
+    result = asyncio.run(fetch_all_deals_for_range(FakeRpcConnection(), start, end))
+    assert len(result) == total
+    assert len({item["id"] for item in result}) == total
+    assert result[0]["id"] == "deal-0000"
+    assert result[-1]["id"] == f"deal-{total - 1:04d}"
+
+
+def test_fetch_all_deals_fails_closed_when_one_second_window_is_saturated():
+    start = datetime(2026, 1, 1)
+    end = start + timedelta(seconds=1)
+
+    class SaturatedRpcConnection:
+        async def get_deals_by_time_range(self, start_time, end_time):
+            return [{"id": f"deal-{index}"} for index in range(1000)]
+
+    with pytest.raises(RuntimeError, match="history_response_limit_reached"):
+        asyncio.run(fetch_all_deals_for_range(SaturatedRpcConnection(), start, end))
+
+
+def test_fetch_all_deals_skips_provider_query_for_empty_or_reversed_range():
+    class NoCallRpcConnection:
+        async def get_deals_by_time_range(self, start_time, end_time):
+            raise AssertionError("No RPC request expected for an empty date range")
+
+    point = datetime(2026, 1, 1)
+    assert asyncio.run(fetch_all_deals_for_range(NoCallRpcConnection(), point, point)) == []
+    assert asyncio.run(fetch_all_deals_for_range(NoCallRpcConnection(), point + timedelta(seconds=1), point)) == []
