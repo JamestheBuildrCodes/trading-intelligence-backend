@@ -58,16 +58,20 @@ def get_user_entitlements(db: Client, user_id: str) -> dict[str, Any]:
     row = response.data[0] if response.data else None
     paid = bool(row and row.get("status") in ("active", "trialing"))
     period_end = row.get("current_period_end") if row else None
-    if paid and period_end:
-        try:
-            parsed_end = period_end if isinstance(period_end, datetime) else datetime.fromisoformat(str(period_end).replace("Z", "+00:00"))
-            if parsed_end.tzinfo is None or parsed_end.utcoffset() is None:
-                parsed_end = parsed_end.replace(tzinfo=timezone.utc)
-            if parsed_end.astimezone(timezone.utc) <= datetime.now(timezone.utc):
-                paid = False
-        except (ValueError, TypeError):
-            # Malformed provider dates should never extend paid access indefinitely.
+    if paid:
+        # Paid access must have a valid, future billing boundary. Missing or
+        # malformed period-end data must never grant indefinite entitlements.
+        if not period_end:
             paid = False
+        else:
+            try:
+                parsed_end = period_end if isinstance(period_end, datetime) else datetime.fromisoformat(str(period_end).replace("Z", "+00:00"))
+                if parsed_end.tzinfo is None or parsed_end.utcoffset() is None:
+                    parsed_end = parsed_end.replace(tzinfo=timezone.utc)
+                if parsed_end.astimezone(timezone.utc) <= datetime.now(timezone.utc):
+                    paid = False
+            except (ValueError, TypeError):
+                paid = False
     plan = str(row.get("plan") or "free") if paid and row else "free"
     if plan not in PLAN_ENTITLEMENTS:
         plan = "free"
