@@ -68,25 +68,65 @@ See [docs/supabase-setup.md](docs/supabase-setup.md) for dashboard configuration
 
 See [mt5_bridge/README.md](mt5_bridge/README.md). Connect a demo account first. The bridge only reads account information and deal history; it cannot submit, modify or close trades. Verify totals against MT5 history before relying on analytics.
 
-## Hosted MT5 connections (MetaApi)
+## Hosted MT5 connections and free GitHub Actions history import
 
-TradeGrid can provision an MT5 account on MetaApi and run read-only history/position synchronization from a separate worker. The account form accepts an **investor/read-only password only**. TradeGrid does not persist that password, but the credential is forwarded to MetaApi, which must retain it to maintain the hosted terminal. Do not connect accounts you are not authorized to monitor.
+TradeGrid already has one read-only MetaApi history worker. Use the repository's GitHub-hosted runner instead of paying for a separate Render Cron Job. The account must first be configured through the existing hosted connection flow; GitHub Actions does not store or receive the MT5 password.
 
-### Required production setup
-1. Create a MetaApi account, review its pricing/region/data-processing terms, and generate an API token with only the access needed for account provisioning and RPC history reads.
-2. Add the token as the server-only Render secret `METAAPI_TOKEN` on the web API service. Never add it as a `NEXT_PUBLIC_` variable or commit it.
-3. Apply `database/migrations/20261011_add_hosted_mt5_connection.sql` to Supabase.
-4. Deploy a separate Render Cron Job from this repository/commit with command `python -m app.workers.hosted_mt5_sync`, environment `METAAPI_TOKEN`, `SUPABASE_URL`, `SUPABASE_SECRET_KEY` (or supported legacy service-role key), and `CONNECTOR_TOKEN_PEPPER`. Test job runtime and timeout with actual history volumes.
-5. Start with an authorized broker demo account. Verify login, server, currency, earliest/latest deals, trade counts, deposits/withdrawals and open positions against MT5 before using this for decisions or marketing hosted support.
+### Database readiness verified
 
-Endpoints:
-- `POST /api/v1/accounts/{account_id}/hosted-mt5` provisions a hosted account.
-- `GET /api/v1/accounts/{account_id}/hosted-mt5/status` reports connection state and imported timestamps.
-- `POST /api/v1/accounts/{account_id}/hosted-mt5/disconnect` requests provider deprovisioning.
+The current production Supabase project has the hosted connection columns (connection_provider, provider_account_id, hosted_connection_status, history cursor/completeness and status timestamps), the live position snapshot tables, and the worker-run health table. The audited schema also has:
+- raw_deals unique on (account_id, mt5_deal_id);
+- trades unique on (account_id, mt5_position_id);
+- portfolio_cash_flows unique on (account_id, external_id);
+- foreign keys from these records to their owning account, with current-position snapshots linked to the account.
 
-History sync uses `METAAPI_INITIAL_LOOKBACK_DAYS` (default 10,000), `METAAPI_HISTORY_CHUNK_DAYS` (default 180), and `METAAPI_MAX_HISTORY_CHUNKS_PER_RUN` (default 10). The worker recursively subdivides ranges when a MetaApi request reaches the 1,000-deal response cap. If a one-second range is still saturated, it raises `history_response_limit_reached` and does not advance the cursor past that interval. A completed configured lookback does not prove the broker retained all history; reconcile imported history with the broker statement.
+The migration database/migrations/20261011_add_hosted_mt5_connection.sql exists and its required columns/constraints are present in production. The worker health table is also present. No destructive migration is required for this workflow.
 
-The worker is a separate process and must not run inside the web request handler. If `METAAPI_TOKEN` is not configured, hosted provisioning remains disabled. The existing Windows MT5 bridge remains available as an alternative.
+### Required GitHub Actions repository secrets
+
+In GitHub, open **trading-intelligence-backend → Settings → Secrets and variables → Actions → New repository secret** and add:
+
+- METAAPI_TOKEN — MetaApi server-side token that can access the hosted MT5 account.
+- SUPABASE_URL — https://znjxpvhjivtdtuitxqxo.supabase.co.
+- SUPABASE_SECRET_KEY — server-only Supabase secret/service-role key accepted by the backend. The code also supports legacy SUPABASE_SERVICE_ROLE_KEY, but this workflow expects SUPABASE_SECRET_KEY.
+- CONNECTOR_TOKEN_PEPPER — the **existing stable** pepper value used by the backend, at least 32 characters. Copy the same value; do not rotate it for this workflow.
+
+The GitHub integration cannot read or create Actions secret values. Do not paste the values into chat or commit them. Copy the existing server-side values from the trusted secret manager/Render configuration where available.
+
+### First manual run
+
+1. In TradeGrid **Accounts**, open the existing Headway account whose server is Headway-Real. Connect it through the hosted MT5 flow using an investor/read-only password. The broker login/server/currency must match this TradeGrid account. The password is submitted to MetaApi for cloud hosting; TradeGrid does not persist it. Do not use a master trading password.
+2. Confirm the account's hosted provider connection is saved and its status is not disconnected. The importer refuses to process the target unless the submitted account UUID points to a configured MetaApi provider account, includes a login/server, and identifies Headway REAL/LIVE (not demo).
+3. Open the [backend repository Actions tab](https://github.com/JamestheBuildrCodes/trading-intelligence-backend/actions).
+4. Select **Hosted MT5 historical import (manual)** and choose **Run workflow**.
+5. Enter the exact UUID of the Headway-Real row from Supabase public.trading_accounts (the existing My main row was observed as c5688758-a78a-482e-aae7-ceb782c0984a during the last audit, but verify the row still represents the account you intend to import).
+6. Tick the explicit confirmation that this is the Headway real/live account. Choose 10 chunks for the first run, then start the workflow.
+
+The workflow runs Python 3.11, installs requirements.txt, runs the backend pytest suite, checks the worker CLI, then invokes the existing worker as follows (the actual UUID and chunk count are passed from workflow inputs):
+
+    python -m app.workers.hosted_mt5_sync --account-id "$TARGET_ACCOUNT_ID" --max-history-chunks "$MAX_HISTORY_CHUNKS"
+
+Each chunk covers at most 180 days. The workflow default is 10 chunks (about 1,800 days of range per run); choose 20 for a larger bounded batch. The job timeout is 45 minutes and GitHub Actions concurrency prevents overlapping workflow runs for the same account. Scheduling is disabled in the committed workflow. After the initial import has been verified, the commented cron example can be enabled in .github/workflows/hosted-mt5-sync.yml and adjusted to your desired interval.
+
+### Progress, completion and safe reruns
+
+Open the workflow run and expand the import step logs. It reports:
+- target account reference (only the final eight UUID characters), broker/server, and the number of chunks;
+- each UTC date window started and the durable cursor saved;
+- provider rows, normalized trading deals, balance cash-flow operations, unsupported/unrecognized rows, IDs already present, and newly-seen deal-ID estimates;
+- bounded database batch progress, position aggregation progress, and earliest/latest observed deal timestamps.
+
+A run may finish successfully while hosted_initial_backfill_complete=false; in that case it exits successfully for that bounded batch, records backfill_incomplete_more_runs_required, and the next manual run continues from hosted_history_cursor_at. Repeat runs until the account status confirms the configured lookback is scanned. A successful scan means only that the configured time range was queried; it does not prove that Headway/MetaApi retains every lifetime deal.
+
+The database uses stable MT5 deal IDs and account-scoped unique constraints. Inserts are upserted with duplicate-ignore semantics; existing deals are not overwritten, and a failed database write prevents the history cursor from advancing for that date window. Provider 1,000-row responses are recursively split into smaller disjoint time ranges; a still-saturated one-second range fails closed. Retry after a failure is safe because deals/cash flows are idempotent and checkpoints only advance after a window's writes complete.
+
+Raw deal history and position-based reconstructed trade rows are distinct. The worker does **not** reconstruct historical balance/equity curves from deals: the account/equity snapshots represent sync-time observations. Partial-close and unsupported netting-reversal records have limits in the current aggregate model, so reconcile trade/deal counts and costs against an MT5 statement before relying on analytics. Report the earliest/latest imported timestamps and any provider retention restrictions.
+
+### Failure conditions
+
+The workflow exits nonzero when required secrets are missing/invalid, the UUID does not exist, the account is not configured with a hosted MetaApi account ID, the target is demo/non-Headway/non-live/disconnected, provider/database sync fails after retry, or the worker cannot save its health record. A missing account is not treated as a successful no-op.
+
+The Actions runner uses the same configured secrets to connect directly to MetaApi and Supabase. It does not call Render and does not require a Render Cron Job. GitHub-hosted runner quotas and MetaApi API/subscription limits still apply.
 
 ## Paystack subscription billing (gated until merchant setup)
 
