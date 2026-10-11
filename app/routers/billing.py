@@ -105,7 +105,40 @@ def _find_subscription_by_code(db: Client, code: str) -> dict | None:
     return result.data[0] if result.data else None
 
 
-def _apply_verified_charge(db: Client, reference: str, secret: str) -> None:
+def _add_billing_period(value: datetime, period: str) -> datetime:
+    months = 12 if period == "yearly" else 1
+    target_month = value.month - 1 + months
+    target_year = value.year + target_month // 12
+    target_month = target_month % 12 + 1
+    import calendar
+    target_day = min(value.day, calendar.monthrange(target_year, target_month)[1])
+    return value.replace(year=target_year, month=target_month, day=target_day)
+
+
+def _parse_provider_datetime(value: Any) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = value if isinstance(value, datetime) else datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except (ValueError, TypeError):
+        return None
+
+
+def _find_subscription_for_payment(db: Client, provider_code: str, customer_code: str) -> dict | None:
+    row = _find_subscription_by_code(db, provider_code)
+    if row is not None:
+        return row
+    if customer_code:
+        result = db.table("user_subscriptions").select("*").eq("provider_customer_code", customer_code).limit(1).execute()
+        return result.data[0] if result.data else None
+    return None
+
+
+def _apply_verified_charge(db: Client, reference: str, secret: str, event_data: dict | None = None) -> None:
+    event_data = event_data or {}
     intent_result = (
         db.table("billing_checkout_intents")
         .select("*")
@@ -113,12 +146,18 @@ def _apply_verified_charge(db: Client, reference: str, secret: str) -> None:
         .limit(1)
         .execute()
     )
-    if not intent_result.data:
-        # A valid provider transaction must still be tied to a TradeGrid-created intent.
-        raise RuntimeError("checkout_intent_not_found")
-    intent = intent_result.data[0]
-    if intent.get("status") == "succeeded":
-        return
+    intent = intent_result.data[0] if intent_result.data else None
+
+    # A recurring charge has a new provider reference and therefore has no
+    # checkout-intent row. It must be linked to an existing verified subscription.
+    event_subscription = event_data.get("subscription") if isinstance(event_data.get("subscription"), dict) else {}
+    event_customer = event_data.get("customer") if isinstance(event_data.get("customer"), dict) else {}
+    provider_subscription_code = str(
+        event_subscription.get("subscription_code")
+        or event_data.get("subscription_code")
+        or ""
+    )
+    customer_code_hint = str(event_customer.get("customer_code") or "")
 
     verified_response = _paystack_request("GET", "/transaction/verify/" + reference, secret)
     transaction = verified_response.get("data") or {}
@@ -130,50 +169,98 @@ def _apply_verified_charge(db: Client, reference: str, secret: str) -> None:
         amount = int(transaction.get("amount"))
     except (ValueError, TypeError):
         raise RuntimeError("transaction_amount_invalid") from None
-    if amount != int(intent["expected_amount"]):
-        raise RuntimeError("transaction_amount_mismatch")
 
     remote_plan = transaction.get("plan")
-    if isinstance(remote_plan, dict):
-        remote_plan_code = remote_plan.get("plan_code")
+    remote_plan_code = remote_plan.get("plan_code") if isinstance(remote_plan, dict) else None
+    customer = transaction.get("customer") if isinstance(transaction.get("customer"), dict) else {}
+    customer_code = str(customer.get("customer_code") or customer_code_hint or "")
+    incoming_email = str(customer.get("email") or "").strip().lower()
+
+    if intent is not None:
+        if amount != int(intent["expected_amount"]):
+            raise RuntimeError("transaction_amount_mismatch")
         if remote_plan_code and str(remote_plan_code) != str(intent["provider_plan_code"]):
             raise RuntimeError("transaction_plan_mismatch")
+        expected_email = str(intent.get("user_email") or "").strip().lower()
+        if incoming_email and expected_email and incoming_email != expected_email:
+            raise RuntimeError("transaction_email_mismatch")
 
-    customer = transaction.get("customer") if isinstance(transaction.get("customer"), dict) else {}
-    customer_code = str(customer.get("customer_code") or intent.get("provider_customer_code") or "")
-    incoming_email = str(customer.get("email") or "").strip().lower()
-    expected_email = str(intent.get("user_email") or "").strip().lower()
-    if incoming_email and expected_email and incoming_email != expected_email:
-        raise RuntimeError("transaction_email_mismatch")
+        old = _current_subscription(db, str(intent["user_id"])) or {}
+        if intent.get("status") == "succeeded":
+            # Idempotent recovery after a partial database failure; do not reset
+            # the start of an already-confirmed billing period on webhook retry.
+            period_start = _parse_provider_datetime(old.get("current_period_start")) or datetime.now(timezone.utc)
+        else:
+            period_start = datetime.now(timezone.utc)
+        period_end = (
+            _parse_provider_datetime(event_subscription.get("next_payment_date"))
+            or _parse_provider_datetime(transaction.get("next_payment_date"))
+            or _add_billing_period(period_start, str(intent["billing_period"]))
+        )
+        row = {
+            "user_id": intent["user_id"],
+            "plan": intent["plan"],
+            "status": "active",
+            "billing_period": intent["billing_period"],
+            "provider": "paystack",
+            "provider_customer_code": customer_code or old.get("provider_customer_code"),
+            "provider_subscription_code": provider_subscription_code or str(old.get("provider_subscription_code") or "") or None,
+            "provider_subscription_email_token": str(event_subscription.get("email_token") or old.get("provider_subscription_email_token") or "") or None,
+            "provider_plan_code": intent["provider_plan_code"],
+            "checkout_reference": reference,
+            "current_period_start": period_start.isoformat(),
+            "current_period_end": period_end.isoformat(),
+            "cancel_at_period_end": False,
+            "last_payment_at": _now(),
+            "last_event_at": _now(),
+            "updated_at": _now(),
+        }
+        db.table("user_subscriptions").upsert(row, on_conflict="user_id").execute()
+        db.table("billing_checkout_intents").update({
+            "status": "succeeded",
+            "provider_customer_code": customer_code or None,
+            "completed_at": _now(),
+            "safe_error_code": None,
+        }).eq("reference", reference).execute()
+        return
 
-    old = _current_subscription(db, str(intent["user_id"])) or {}
-    subscription = transaction.get("subscription") if isinstance(transaction.get("subscription"), dict) else {}
-    next_payment_date = subscription.get("next_payment_date") or transaction.get("next_payment_date")
-    plan_row = {
-        "user_id": intent["user_id"],
-        "plan": intent["plan"],
+    # Subsequent billing cycle: reconcile the new transaction with the
+    # existing subscription and its server-configured expected price.
+    subscription_row = _find_subscription_for_payment(db, provider_subscription_code, customer_code)
+    if subscription_row is None:
+        if not provider_subscription_code and not customer_code:
+            # Signed but unrelated Paystack charge; it cannot grant TradeGrid access.
+            return
+        raise RuntimeError("recurring_subscription_not_linked")
+
+    plan = str(subscription_row.get("plan") or "")
+    period = str(subscription_row.get("billing_period") or "")
+    price = PLANS.get((plan, period))
+    if not price:
+        raise RuntimeError("recurring_plan_invalid")
+    if amount != int(price["amount"]):
+        raise RuntimeError("transaction_amount_mismatch")
+    if remote_plan_code and str(remote_plan_code) != str(subscription_row.get("provider_plan_code")):
+        raise RuntimeError("transaction_plan_mismatch")
+
+    old_end = _parse_provider_datetime(subscription_row.get("current_period_end"))
+    period_start = old_end or datetime.now(timezone.utc)
+    period_end = (
+        _parse_provider_datetime(event_subscription.get("next_payment_date"))
+        or _parse_provider_datetime(transaction.get("next_payment_date"))
+        or _add_billing_period(period_start, period)
+    )
+    db.table("user_subscriptions").update({
         "status": "active",
-        "billing_period": intent["billing_period"],
-        "provider": "paystack",
-        "provider_customer_code": customer_code or old.get("provider_customer_code"),
-        "provider_subscription_code": str(subscription.get("subscription_code") or old.get("provider_subscription_code") or "") or None,
-        "provider_subscription_email_token": str(subscription.get("email_token") or old.get("provider_subscription_email_token") or "") or None,
-        "provider_plan_code": intent["provider_plan_code"],
-        "checkout_reference": reference,
-        "current_period_start": _now(),
-        "current_period_end": next_payment_date,
+        "provider_customer_code": customer_code or subscription_row.get("provider_customer_code"),
+        "provider_subscription_code": provider_subscription_code or subscription_row.get("provider_subscription_code"),
+        "current_period_start": period_start.isoformat(),
+        "current_period_end": period_end.isoformat(),
         "cancel_at_period_end": False,
         "last_payment_at": _now(),
         "last_event_at": _now(),
         "updated_at": _now(),
-    }
-    db.table("user_subscriptions").upsert(plan_row, on_conflict="user_id").execute()
-    db.table("billing_checkout_intents").update({
-        "status": "succeeded",
-        "provider_customer_code": customer_code or None,
-        "completed_at": _now(),
-        "safe_error_code": None,
-    }).eq("reference", reference).execute()
+    }).eq("user_id", subscription_row["user_id"]).execute()
 
 
 def _link_subscription_event(db: Client, data: dict) -> None:
@@ -380,7 +467,7 @@ async def paystack_webhook(request: Request, db: Client = Depends(get_supabase))
             reference = str(data.get("reference") or "")
             if not reference:
                 raise RuntimeError("reference_missing")
-            _apply_verified_charge(db, reference, secret)
+            _apply_verified_charge(db, reference, secret, data)
         elif event_type == "subscription.create":
             _link_subscription_event(db, data)
         elif event_type in ("subscription.disable", "invoice.payment_failed"):
@@ -415,7 +502,7 @@ async def paystack_webhook(request: Request, db: Client = Depends(get_supabase))
         error_code = str(exc) if str(exc) in {
             "checkout_intent_not_found", "transaction_not_verified", "transaction_currency_mismatch",
             "transaction_amount_invalid", "transaction_amount_mismatch", "transaction_plan_mismatch",
-            "transaction_email_mismatch", "reference_missing", "subscription_link_not_found",
+            "transaction_email_mismatch", "reference_missing", "subscription_link_not_found", "recurring_subscription_not_linked", "recurring_plan_invalid",
         } else "webhook_processing_failed"
         db.table("billing_webhook_events").update({
             "processing_status": "failed",
