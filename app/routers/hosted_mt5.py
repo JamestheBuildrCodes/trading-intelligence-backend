@@ -90,6 +90,7 @@ async def connect_hosted_mt5(
             "hosted_connection_status": "provisioning",
             "hosted_last_error_code": None,
             "hosted_history_cursor_at": None,
+            "hosted_initial_backfill_complete": False,
             "hosted_first_deal_at": None,
             "hosted_last_deal_at": None,
             "hosted_connection_verified_at": None,
