@@ -35,6 +35,26 @@ class AccountOut(BaseModel):
     current_equity: float
     connection_status: str
     last_sync_at: datetime | None = None
+    broker: str | None = None
+    server: str | None = None
+    mt5_login: str | None = None
+    initial_balance: float = 0
+    timezone: str = "UTC"
+    session_reference_tz: str = "America/New_York"
+    risk_mode: str = "fixed"
+    risk_value: float = 0
+    risk_base: str = "initial_balance"
+
+
+class AccountSettingsUpdate(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    label: str | None = Field(default=None, min_length=1, max_length=100)
+    timezone: str | None = Field(default=None, min_length=1, max_length=80)
+    session_reference_tz: str | None = Field(default=None, min_length=1, max_length=80)
+    risk_mode: Literal["fixed", "percent"] | None = None
+    risk_value: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    risk_base: Literal["initial_balance", "current_balance"] | None = None
 
 
 class ConnectorTokenOut(BaseModel):
