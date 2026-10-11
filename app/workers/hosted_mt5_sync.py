@@ -1,7 +1,8 @@
-"""Scheduled hosted MT5 synchronizer for MetaApi cloud accounts.
+"""Bounded hosted MT5 history synchronizer for one explicit Headway live account.
 
-Run as a Render Cron Job after setting the required secrets:
-  python -m app.workers.hosted_mt5_sync
+Run through the GitHub Actions hosted history workflow after configuring
+repository secrets. The worker requires an exact target account UUID:
+  python -m app.workers.hosted_mt5_sync --account-id <trading_accounts UUID>
 
 The job performs read-only RPC operations only. Broker passwords are handled by
 MetaApi at account provisioning time; TradeGrid never stores them.
