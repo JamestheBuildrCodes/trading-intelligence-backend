@@ -7,6 +7,7 @@ from app.config import get_settings
 from app.db import get_supabase
 from app.deps import require_account_owner
 from app.schemas import HostedMt5ConnectIn, HostedMt5ConnectOut
+from app.services.entitlements import require_account_feature
 
 router = APIRouter(prefix="/api/v1/accounts", tags=["hosted MT5"])
 
@@ -42,6 +43,7 @@ async def connect_hosted_mt5(
 ):
     """Provision an MT5 account on MetaApi. The investor password is never persisted by TradeGrid."""
     current = _account_row(db, account_id)
+    require_account_feature(db, account_id, "hosted_mt5")
     if current.get("connection_provider") == "metaapi" and current.get("provider_account_id"):
         raise HTTPException(
             status_code=409,
@@ -150,6 +152,8 @@ async def disconnect_hosted_mt5(
     db: Client = Depends(get_supabase),
 ):
     row = _account_row(db, account_id)
+    if row.get("connection_provider") == "metaapi" and row.get("provider_account_id"):
+        require_account_feature(db, account_id, "hosted_mt5")
     provider_id = row.get("provider_account_id")
     if row.get("connection_provider") == "metaapi" and provider_id:
         token = _provider_token()
