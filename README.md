@@ -10,7 +10,7 @@ FastAPI backend for the Trading Intelligence dashboard.
 - Read-only Windows MT5 Python bridge under `mt5_bridge/`.
 - Connector ingestion of raw MT5 deal history, duplicate-safe by account + deal ID.
 - Position aggregation for common open/close and partial-close histories.
-- Overview metrics and paginated closed-trade listing.\n- Daily balance/equity snapshots and cash-flow-adjusted portfolio growth tracking.\n- User-recorded deposits and withdrawals with Modified Dietz return calculation.
+- Overview metrics and paginated closed-trade listing.\n- Daily balance/equity snapshots and cash-flow-adjusted portfolio growth tracking.\n- MT5 balance-operation import plus manual cash-flow entries, with Modified Dietz return calculation.
 - Health endpoint at `/health`.
 
 ## Known limitations
