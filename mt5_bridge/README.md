@@ -29,3 +29,6 @@ Copy-Item .env.example .env
 - The deployed backend must have the current schema and environment variables configured before running this bridge.
 - Connector tokens are account-scoped. Revoke and reissue any token that may have been exposed.
 - This is analytics infrastructure, not financial advice and not a guarantee of future results.
+
+
+Legacy installations that still use `TRADEGRID_API_BASE_URL`, `TRADEGRID_ACCOUNT_ID`, or `TRADEGRID_CONNECTOR_TOKEN` remain supported by the bridge for compatibility. New installations should use the `TRADVORYX_` names.
