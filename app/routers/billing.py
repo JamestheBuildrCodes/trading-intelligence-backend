@@ -346,8 +346,8 @@ def billing_status(user: CurrentUser = Depends(get_current_user), db: Client = D
 
 @router.post("/checkout")
 def start_checkout(body: CheckoutRequest, user: CurrentUser = Depends(get_current_user), db: Client = Depends(get_supabase)):
-    if not user.email:
-        raise HTTPException(status_code=422, detail="A verified email address is required before paid checkout.")
+    if not user.email or not user.email_verified:
+        raise HTTPException(status_code=422, detail="Verify your email address before starting paid checkout.")
     current = get_user_entitlements(db, user.id)
     if current["paid"]:
         raise HTTPException(status_code=409, detail="An active paid subscription already exists. Cancel or change your current plan first.")
