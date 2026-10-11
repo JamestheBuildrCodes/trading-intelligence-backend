@@ -58,7 +58,7 @@ def _signed_webhook(raw_body: bytes, signature: str | None, secret: str) -> bool
     if not signature:
         return False
     expected = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha512).hexdigest()
-    return hmac.compare_digest(expected, signature.strip())
+    return hmac.compare_digest(expected, signature.strip().lower())
 
 
 def _paystack_request(method: str, path: str, secret: str, payload: dict | None = None) -> dict:
