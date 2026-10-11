@@ -19,6 +19,8 @@ class AccountCreate(BaseModel):
     risk_mode: str = Field(default="fixed", min_length=1, max_length=40)
     risk_value: float = Field(default=0, ge=0, allow_inf_nan=False)
     risk_base: str = Field(default="initial_balance", min_length=1, max_length=40)
+    prop_firm: str | None = Field(default=None, max_length=120)
+    challenge_phase: str | None = Field(default=None, max_length=80)
 
     @field_validator("currency")
     @classmethod
@@ -44,6 +46,8 @@ class AccountOut(BaseModel):
     risk_mode: str = "fixed"
     risk_value: float = 0
     risk_base: str = "initial_balance"
+    prop_firm: str | None = None
+    challenge_phase: str | None = None
 
 
 class AccountSettingsUpdate(BaseModel):
@@ -55,6 +59,8 @@ class AccountSettingsUpdate(BaseModel):
     risk_mode: Literal["fixed", "percent"] | None = None
     risk_value: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     risk_base: Literal["initial_balance", "current_balance"] | None = None
+    prop_firm: str | None = Field(default=None, max_length=120)
+    challenge_phase: str | None = Field(default=None, max_length=80)
 
 
 class ConnectorTokenOut(BaseModel):
@@ -204,3 +210,91 @@ class PortfolioGrowthOut(BaseModel):
     return_pct: float | None
     snapshots: list[PortfolioSnapshotOut]
     cash_flows: list[CashFlowOut]
+
+
+class OpenPositionIn(BaseModel):
+    mt5_position_id: str = Field(min_length=1, max_length=80)
+    symbol: str = Field(min_length=1, max_length=80)
+    direction: Literal["buy", "sell"]
+    volume: float = Field(gt=0, allow_inf_nan=False)
+    open_price: float = Field(ge=0, allow_inf_nan=False)
+    current_price: float = Field(ge=0, allow_inf_nan=False)
+    stop_loss: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    take_profit: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    unrealized_profit: float = Field(default=0, allow_inf_nan=False)
+    swap: float = Field(default=0, allow_inf_nan=False)
+    risk_to_stop: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    opened_at: datetime
+
+    @field_validator("opened_at")
+    @classmethod
+    def require_position_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("opened_at must include a timezone offset")
+        return value
+
+
+class PositionSnapshotIn(BaseModel):
+    snapshot_at: datetime
+    currency: str = Field(min_length=3, max_length=8)
+    balance: float = Field(ge=0, allow_inf_nan=False)
+    equity: float = Field(ge=0, allow_inf_nan=False)
+    broker_login: str | None = Field(default=None, max_length=80)
+    broker_server: str | None = Field(default=None, max_length=150)
+    positions: list[OpenPositionIn] = Field(max_length=5000)
+
+    @field_validator("snapshot_at")
+    @classmethod
+    def require_snapshot_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("snapshot_at must include a timezone offset")
+        return value
+
+    @field_validator("currency")
+    @classmethod
+    def normalize_snapshot_currency(cls, value: str) -> str:
+        return value.upper()
+
+
+class PropFirmRulesIn(BaseModel):
+    prop_firm: str | None = Field(default=None, max_length=120)
+    challenge_phase: str | None = Field(default=None, max_length=80)
+    account_size: float = Field(gt=0, allow_inf_nan=False)
+    daily_drawdown_limit: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    daily_drawdown_mode: Literal["percentage", "absolute"] = "percentage"
+    max_drawdown_limit: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    max_drawdown_mode: Literal["percentage", "absolute"] = "percentage"
+    max_drawdown_type: Literal["static", "trailing"] = "static"
+    profit_target: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    profit_target_mode: Literal["percentage", "absolute"] = "percentage"
+    minimum_trading_days: int | None = Field(default=None, ge=0, le=365)
+    consistency_rule_pct: float | None = Field(default=None, gt=0, le=100, allow_inf_nan=False)
+    max_lot_size: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    rules_source: str = Field(default="user_configured", min_length=1, max_length=120)
+    rules_timezone: str = Field(default="UTC", min_length=1, max_length=80)
+    notes: str = Field(default="", max_length=2000)
+
+
+class CostGroupOut(BaseModel):
+    key: str
+    trade_count: int
+    gross_pl: float
+    commission_net: float
+    swap_net: float
+    net_pl: float
+    recorded_cost: float
+
+
+class RiskPositionOut(BaseModel):
+    mt5_position_id: str
+    symbol: str
+    direction: Literal["buy", "sell"]
+    volume: float
+    open_price: float
+    current_price: float
+    stop_loss: float | None
+    take_profit: float | None
+    unrealized_profit: float
+    swap: float
+    risk_to_stop: float | None
+    opened_at: datetime
