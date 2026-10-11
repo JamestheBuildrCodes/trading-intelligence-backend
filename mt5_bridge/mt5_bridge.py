@@ -5,10 +5,12 @@ modifies, or closes orders. Deal uploads are idempotent on the backend.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -30,9 +32,12 @@ API_BASE = os.getenv(
 ACCOUNT_ID = os.getenv("TRADEGRID_ACCOUNT_ID", "").strip()
 CONNECTOR_TOKEN = os.getenv("TRADEGRID_CONNECTOR_TOKEN", "").strip()
 TERMINAL_PATH = os.getenv("MT5_TERMINAL_PATH", "").strip() or None
-INITIAL_LOOKBACK_DAYS = max(1, int(os.getenv("MT5_INITIAL_LOOKBACK_DAYS", "30")))
+INITIAL_LOOKBACK_DAYS = max(1, int(os.getenv("MT5_INITIAL_LOOKBACK_DAYS", "10000")))
+HISTORY_CHUNK_DAYS = max(1, int(os.getenv("MT5_HISTORY_CHUNK_DAYS", "90")))
+OVERLAP_DAYS = max(1, int(os.getenv("MT5_SYNC_OVERLAP_DAYS", "2")))
 POLL_SECONDS = max(15, int(os.getenv("MT5_POLL_SECONDS", "60")))
 BATCH_SIZE = min(500, max(1, int(os.getenv("MT5_BATCH_SIZE", "250"))))
+SYNC_STATE_PATH = Path(os.getenv("MT5_SYNC_STATE_PATH", ".tradegrid_sync_state.json"))
 
 
 def require_config() -> None:
@@ -119,14 +124,19 @@ def deal_to_payload(deal: Any, directions: dict[str, str]) -> dict[str, Any] | N
         direction = current_type_direction
         if direction:
             directions[position_id] = direction
-    elif direction is None:
-        # History may begin after the original entry. Do not guess the position
-        # direction because doing so would corrupt long/short analytics.
-        log.warning("Skipping deal %s: opening direction for position %s is unknown",
-                    deal.ticket, position_id)
-        return None
+    elif entry in ("out", "out_by") and direction is None:
+        # On normal closes the deal side is opposite the original position.
+        # This is necessary when a new sync window contains only an exit.
+        direction = {"buy": "sell", "sell": "buy"}.get(current_type_direction or "")
+        if direction:
+            directions[position_id] = direction
+    elif entry == "inout" and direction is None:
+        # Reversal legs remain unsupported by the position aggregation schema;
+        # retain a source-side direction for audit instead of silently guessing a completed trade.
+        direction = current_type_direction
 
     if not direction:
+        log.warning("Skipping deal %s: direction unavailable for position %s", deal.ticket, position_id)
         return None
 
     deal_time = utc_from_epoch(int(deal.time))
@@ -183,40 +193,78 @@ def upload_batch(
     log.info("Backend accepted %s deals: %s", len(deals), response.json())
 
 
+def load_sync_checkpoint(now: datetime) -> datetime:
+    """Resume from the last fully uploaded time window, with an overlap."""
+    try:
+        data = json.loads(SYNC_STATE_PATH.read_text(encoding="utf-8"))
+        if data.get("account_id") == ACCOUNT_ID and data.get("last_successful_end"):
+            checkpoint = datetime.fromisoformat(str(data["last_successful_end"]).replace("Z", "+00:00"))
+            if checkpoint.tzinfo is None or checkpoint.utcoffset() is None:
+                checkpoint = checkpoint.replace(tzinfo=timezone.utc)
+            return checkpoint.astimezone(timezone.utc) - timedelta(days=OVERLAP_DAYS)
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        pass
+    # The server/terminal history filter still determines the earliest available deal.
+    return now - timedelta(days=INITIAL_LOOKBACK_DAYS)
+
+
+def save_sync_checkpoint(end: datetime) -> None:
+    """Persist only non-secret cursor state after a successful window."""
+    SYNC_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = SYNC_STATE_PATH.with_suffix(SYNC_STATE_PATH.suffix + ".tmp")
+    temp_path.write_text(json.dumps({
+        "account_id": ACCOUNT_ID,
+        "last_successful_end": end.astimezone(timezone.utc).isoformat(),
+    }), encoding="utf-8")
+    os.replace(temp_path, SYNC_STATE_PATH)
+
+
 def sync_window(client: httpx.Client, start: datetime, end: datetime) -> int:
-    terminal_deals = fetch_deals(start, end)
-    directions: dict[str, str] = {}
-    payloads: list[dict[str, Any]] = []
-    cash_flows: list[dict[str, Any]] = []
-    for deal in terminal_deals:
-        cash_flow = cash_flow_to_payload(deal)
-        if cash_flow is not None:
-            cash_flows.append(cash_flow)
-        payload = deal_to_payload(deal, directions)
-        if payload is not None:
-            payloads.append(payload)
-
-    # Empty syncs still update account balance/equity and connection status.
-    if not payloads:
-        upload_batch(client, [], cash_flows)
-        log.info("No trade deals found; imported %s cash movements", len(cash_flows))
-        return 0
-
+    """Backfill/sync time windows without loading the entire account history in memory."""
+    cursor = start
     sent = 0
-    for offset in range(0, len(payloads), BATCH_SIZE):
-        chunk = payloads[offset:offset + BATCH_SIZE]
-        # Cash-flow tickets are sent once per sync; the backend de-duplicates
-        # by account and MT5 deal ticket if a later overlap includes them again.
-        upload_batch(client, chunk, cash_flows if offset == 0 else [])
-        sent += len(chunk)
+    while cursor < end:
+        chunk_end = min(cursor + timedelta(days=HISTORY_CHUNK_DAYS), end)
+        terminal_deals = fetch_deals(cursor, chunk_end)
+        directions: dict[str, str] = {}
+        payloads: list[dict[str, Any]] = []
+        cash_flows: list[dict[str, Any]] = []
+
+        for deal in terminal_deals:
+            cash_flow = cash_flow_to_payload(deal)
+            if cash_flow is not None:
+                cash_flows.append(cash_flow)
+            payload = deal_to_payload(deal, directions)
+            if payload is not None:
+                payloads.append(payload)
+
+        # Keep cash-flow batches bounded by the backend schema's max length.
+        for offset in range(0, len(cash_flows), 1000):
+            upload_batch(client, [], cash_flows[offset:offset + 1000])
+
+        for offset in range(0, len(payloads), BATCH_SIZE):
+            chunk = payloads[offset:offset + BATCH_SIZE]
+            upload_batch(client, chunk, [])
+            sent += len(chunk)
+
+        # An empty first window still refreshes balance/equity and health. Cash
+        # flows were already uploaded above and are idempotent by account/ticket.
+        if not payloads and not cash_flows and cursor == start:
+            upload_batch(client, [], [])
+
+        # Advance only after every request in this window has succeeded. If a
+        # later batch fails, this window is replayed; source IDs make it safe.
+        save_sync_checkpoint(chunk_end)
+        cursor = chunk_end
+
     return sent
 
 
 def main() -> None:
     require_config()
     connect_terminal()
-    now = datetime.now(timezone.utc)
-    start = now - timedelta(days=INITIAL_LOOKBACK_DAYS)
+    start = load_sync_checkpoint(datetime.now(timezone.utc))
+    log.info("Starting history sync from %s; checkpoint=%s", start.isoformat(), SYNC_STATE_PATH.name)
 
     try:
         with httpx.Client() as client:
@@ -224,12 +272,12 @@ def main() -> None:
                 try:
                     end = datetime.now(timezone.utc)
                     sent = sync_window(client, start, end)
+                    save_sync_checkpoint(end)
                     log.info("Sync complete: %s deals submitted", sent)
-                    # Re-read an overlap window so late-arriving deal history is
-                    # caught. The server's account_id + deal ID upsert is idempotent.
-                    start = end - timedelta(days=2)
-                except (httpx.HTTPError, RuntimeError, ValueError) as exc:
-                    log.error("Sync failed: %s", exc)
+                    start = end - timedelta(days=OVERLAP_DAYS)
+                except (httpx.HTTPError, RuntimeError, ValueError, OSError) as exc:
+                    log.error("Sync failed; resuming from last successful checkpoint: %s", exc)
+                    start = load_sync_checkpoint(datetime.now(timezone.utc))
                 time.sleep(POLL_SECONDS)
     finally:
         mt5.shutdown()

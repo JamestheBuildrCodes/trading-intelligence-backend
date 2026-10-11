@@ -18,7 +18,8 @@ Copy-Item .env.example .env
 ```
 
 6. Edit `.env` with the Render API URL, account UUID and one-time token. Set `MT5_TERMINAL_PATH` if MT5 isn't discoverable.
-7. Run `python mt5_bridge.py`. Keep MT5 and the bridge running. For always-on sync, use a reliable Windows VPS only after successful demo reconciliation.
+7. Run `python mt5_bridge.py`. Start with a demo account and reconcile its imported history against the MT5 terminal before relying on analytics.
+8. This bridge requires a logged-in MT5 desktop terminal and a running bridge process. To sync when your personal PC is off, run the bridge on a reliable hosted Windows VPS. A fully managed cloud connection requires a separate provider integration, account provisioning and server-side credentials; that is not delivered by this local bridge.
 
 ## Reliability notes
 

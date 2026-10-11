@@ -4,7 +4,7 @@ from supabase import Client
 from app.db import get_supabase
 from app.deps import require_account_owner
 from app.schemas import OverviewOut, TradeOut
-from app.services.analytics import compute_overview, compute_trading_dna
+from app.services.analytics import compute_overview, compute_performance_breakdown, compute_trading_dna
 
 router = APIRouter(prefix="/api/v1/accounts", tags=["overview"])
 
@@ -41,6 +41,15 @@ def list_trades(
 
     return query.execute().data
 
+
+
+@router.get("/{account_id}/performance-breakdown")
+def get_performance_breakdown(
+    account_id: str = Depends(require_account_owner),
+    db: Client = Depends(get_supabase),
+):
+    """Return grouped insights calculated over every imported closed trade."""
+    return compute_performance_breakdown(db, account_id)
 
 
 @router.get("/{account_id}/trading-dna")
