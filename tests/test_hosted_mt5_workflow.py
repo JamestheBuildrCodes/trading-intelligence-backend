@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -37,7 +38,8 @@ def test_workflow_is_manual_and_requires_live_confirmation_and_secrets():
     assert "\non:\n  schedule:" not in text
 
 
-def test_worker_requires_one_explicitly_selected_account():
+def test_worker_requires_one_explicitly_selected_account(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["hosted_mt5_sync"])
     with pytest.raises(SystemExit) as exc:
         worker.main()
     assert exc.value.code == 2
