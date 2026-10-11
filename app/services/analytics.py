@@ -246,7 +246,7 @@ def summarize_performance_breakdown(trades: list[dict], timezone_name: str = "UT
             "first_closed_at": first,
             "last_closed_at": last,
             "status": "no_closed_trades_imported" if not count else "imported_history_completeness_unverified",
-            "note": "Coverage reflects closed trades currently imported into TradeGrid. Completeness against the broker statement must be reconciled separately.",
+            "note": "Coverage reflects closed trades currently imported into Tradvoryx. Completeness against the broker statement must be reconciled separately.",
         },
         **{name: finalize(rows) for name, rows in groups.items()},
     }
