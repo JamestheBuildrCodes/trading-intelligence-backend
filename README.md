@@ -93,7 +93,7 @@ The worker is a separate process and must not run inside the web request handler
 TradeGrid includes a server-side Paystack billing flow. Paid checkout remains disabled until the merchant configures the provider secret and the exact plan codes in Render. No browser-supplied amount grants access.
 
 ### Paystack dashboard configuration
-Create four recurring plans in **USD** with these exact amounts and intervals:
+Create four recurring plans in **USD** with these exact amounts and intervals. A Nigerian Paystack merchant must have USD acceptance enabled (and an eligible USD settlement arrangement) before setting up these plans; account eligibility for international payments and recurring card charges is determined by Paystack, not TradeGrid.
 - TradeGrid Trader Monthly — USD 15, monthly.
 - TradeGrid Trader Annual — USD 144, annually.
 - TradeGrid Pro Monthly — USD 29, monthly.
@@ -103,6 +103,8 @@ Set the resulting plan codes as `PAYSTACK_TRADER_MONTHLY_PLAN_CODE`, `PAYSTACK_T
 
 Configure the Paystack webhook URL to:
 `https://trading-intelligence-backend.onrender.com/api/v1/billing/webhook`
+
+Checkout requires a verified Supabase email. The backend enforces the account cap in both FastAPI and an atomic PostgreSQL trigger, so concurrent account-creation requests cannot bypass a plan allowance.
 
 The webhook verifies Paystack's HMAC-SHA512 signature, verifies each successful transaction server-side, checks its reference/amount/currency/plan against a TradeGrid-created checkout intent, processes provider event IDs idempotently, and never activates an entitlement from a browser return alone. Subsequent recurring charges are linked to an existing subscription and checked against the server-configured plan amount. Failed payments move the subscription to past_due; verified cancellation events remove paid entitlements.
 
