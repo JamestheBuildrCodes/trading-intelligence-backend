@@ -151,7 +151,7 @@ def evaluate_prop_status(
         data_warnings.append("The configured rule timezone was invalid; UTC was used for this calculation.")
     if rules.get("max_drawdown_type") == "trailing":
         data_warnings.append("Trailing drawdown requires a high-watermark rule/equity series that is not yet stored; no trailing buffer was invented.")
-    data_warnings.append("Calculations are advisory. Firm-specific start-of-day baselines, cash-flow treatment, trailing rules, and consistency definitions must be verified against the firm's current agreement.")
+    data_warnings.append("Verify these advisory calculations against the firm's current agreement, including start-of-day baselines, cash-flow treatment, trailing rules, and consistency definitions.")
 
     return {
         "status": "advisory",
