@@ -4,7 +4,7 @@ from supabase import Client
 from app.db import get_supabase
 from app.deps import require_account_owner
 from app.schemas import OverviewOut, TradeOut
-from app.services.analytics import compute_overview
+from app.services.analytics import compute_overview, compute_trading_dna
 
 router = APIRouter(prefix="/api/v1/accounts", tags=["overview"])
 
@@ -40,3 +40,12 @@ def list_trades(
         query = query.eq("session", session)
 
     return query.execute().data
+
+
+
+@router.get("/{account_id}/trading-dna")
+def get_trading_dna(
+    account_id: str = Depends(require_account_owner),
+    db: Client = Depends(get_supabase),
+):
+    return compute_trading_dna(db, account_id)
