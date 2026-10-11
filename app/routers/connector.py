@@ -39,6 +39,23 @@ def ingest_deals(
         account_update["current_balance"] = batch.balance
     if batch.equity is not None:
         account_update["current_equity"] = batch.equity
-    db.table("trading_accounts").update(account_update).eq("id", account_id).execute()
+    account_result = db.table("trading_accounts").update(account_update).eq("id", account_id).execute()
+    account_row = (account_result.data or [{}])[0]
 
-    return {"received": len(batch.deals), "positions_recomputed": len(position_ids)}
+    # Refresh today's snapshot on each sync; snapshots from prior days remain.
+    if batch.balance is not None and batch.equity is not None:
+        captured_at = datetime.now(timezone.utc)
+        db.table("portfolio_snapshots").upsert(
+            {
+                "account_id": account_id,
+                "snapshot_date": captured_at.date().isoformat(),
+                "captured_at": captured_at.isoformat(),
+                "balance": batch.balance,
+                "equity": batch.equity,
+                "currency": account_row.get("currency", "USD"),
+                "source": "mt5_connector",
+            },
+            on_conflict="account_id,snapshot_date",
+        ).execute()
+
+    return {"received": len(batch.deals), "positions_recomputed": len(position_ids), "snapshot_recorded": batch.balance is not None and batch.equity is not None}
