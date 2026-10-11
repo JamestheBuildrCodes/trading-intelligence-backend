@@ -74,7 +74,7 @@ def _validate_headway_live_account(row: dict, expected_account_id: str) -> None:
     status = str(row.get("hosted_connection_status") or "").lower()
     if status == "disconnected":
         raise ValueError("target_account_disconnected")
-    if status not in {"not_configured", "provisioning", "connecting", "connected", "syncing", "error"}:
+    if status not in {"provisioning", "connecting", "connected", "syncing", "error"}:
         raise ValueError("target_account_status_invalid")
     broker = str(row.get("broker") or "").strip().lower()
     server = str(row.get("server") or "").strip().lower()
@@ -529,7 +529,18 @@ async def run_once(account_id: str, max_chunks: int = MAX_HISTORY_CHUNKS_PER_RUN
         run_status = "failed"
         if safe_error is None:
             candidate = str(exc)
-            safe_error = candidate if candidate.replace("_", "").replace(":", "").replace(" ", "").isalnum() and len(candidate) <= 120 else "worker_run_failed"
+            known_codes = {
+                "target_account_id_required", "max_history_chunks_must_be_between_1_and_50",
+                "configuration_invalid_check_required_Actions_secrets_and_key_lengths",
+                "configuration_invalid: check required Actions secrets and key lengths",
+                "worker_run_health_record_could_not_be_created", "target_account_not_found",
+                "target_account_disappeared_during_sync", "target_account_status_unavailable",
+                "target_account_id_mismatch", "target_account_not_hosted", "provider_account_id_missing",
+                "target_account_disconnected", "target_account_status_invalid", "demo_accounts_are_not_allowed",
+                "target_account_is_not_headway", "target_account_is_not_live", "target_account_identity_missing",
+                "account_sync_failed_after_retries", "backfill_incomplete_more_runs_required",
+            }
+            safe_error = candidate if candidate in known_codes else "worker_run_failed"
         log.error("Hosted MT5 run failed safely: error_code=%s target_reference=...%s", safe_error, target_label)
         raise RuntimeError(safe_error) from None
     finally:
@@ -558,11 +569,26 @@ def main() -> None:
     try:
         asyncio.run(run_once(account_id=args.account_id, max_chunks=args.max_history_chunks))
     except Exception as exc:
-        # Print only a sanitized error code; never dump provider/database exceptions or secrets.
-        safe = str(exc)
-        allowed_chars = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_:- ()")
-        if not safe or len(safe) > 120 or any(char not in allowed_chars for char in safe):
-            safe = "worker_run_failed_check_configuration_database_and_provider_status"
+        # Print only allow-listed error codes; never dump provider/database exceptions or secrets.
+        candidate = str(exc)
+        safe_codes = {
+            "target_account_id_required", "max_history_chunks_must_be_between_1_and_50",
+            "worker_run_health_record_could_not_be_created", "target_account_not_found",
+            "target_account_disappeared_during_sync", "target_account_status_unavailable",
+            "target_account_id_mismatch", "target_account_not_hosted", "provider_account_id_missing",
+            "target_account_disconnected", "target_account_status_invalid", "demo_accounts_are_not_allowed",
+            "target_account_is_not_headway", "target_account_is_not_live", "target_account_identity_missing",
+            "account_sync_failed_after_retries", "backfill_incomplete_more_runs_required",
+            "configuration_invalid: check required Actions secrets and key lengths",
+        }
+        if candidate.startswith("missing_required_configuration: "):
+            safe = candidate if all(
+                name in candidate
+                for name in ("METAAPI_TOKEN", "SUPABASE_URL", "CONNECTOR_TOKEN_PEPPER")
+                if name in candidate
+            ) else "missing_required_configuration"
+        else:
+            safe = candidate if candidate in safe_codes else "worker_run_failed_check_configuration_database_and_provider_status"
         log.error("Workflow should fail: error_code=%s", safe)
         raise SystemExit(1) from None
 
