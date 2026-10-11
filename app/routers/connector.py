@@ -100,9 +100,9 @@ def ingest_open_positions(
     incoming_server = str(batch.broker_server or "").strip().casefold()
 
     if expected_login and incoming_login and expected_login != incoming_login:
-        raise HTTPException(status_code=409, detail="MT5 login does not match this TradeGrid account profile.")
+        raise HTTPException(status_code=409, detail="MT5 login does not match this Tradvoryx account profile.")
     if expected_server and incoming_server and expected_server != incoming_server:
-        raise HTTPException(status_code=409, detail="MT5 server does not match this TradeGrid account profile.")
+        raise HTTPException(status_code=409, detail="MT5 server does not match this Tradvoryx account profile.")
     expected_currency = str(account.get("currency") or "").strip().upper()
     if expected_currency and expected_currency != batch.currency:
         raise HTTPException(
