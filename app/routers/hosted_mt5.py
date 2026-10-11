@@ -67,16 +67,6 @@ def _worker_health(db: Client) -> dict:
         }
 
 
-def _require_hosted_worker_ready(db: Client) -> None:
-    token = _provider_token()
-    health = _worker_health(db)
-    if not health["worker_ready"]:
-        raise HTTPException(
-            status_code=503,
-            detail="Hosted MT5 is not ready yet. The provider token is configured but the scheduled worker has not completed a successful run in the last 15 minutes.",
-        )
-
-
 def _provider_token() -> str:
     token = get_settings().metaapi_token
     if not token:
