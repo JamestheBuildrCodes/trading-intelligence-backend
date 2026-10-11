@@ -6,6 +6,7 @@ from supabase import Client
 
 from app.db import get_supabase
 from app.deps import CurrentUser, get_current_user
+from app.services.entitlements import get_user_entitlements
 
 router = APIRouter(prefix="/api/v1", tags=["portfolio risk"])
 
@@ -64,6 +65,19 @@ def get_portfolio_risk(
     db: Client = Depends(get_supabase),
 ):
     """Qualitative cross-account risk view; does not invent price-based correlation."""
+    entitlement = get_user_entitlements(db, user.id)
+    if entitlement["entitlements"].get("portfolio_risk") is not True:
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "plan_upgrade_required",
+                "feature": "portfolio_risk",
+                "current_plan": entitlement["plan"],
+                "required_plan": "Pro",
+                "message": "Cross-account live risk requires the Pro plan.",
+            },
+        )
     result = (
         db.table("trading_accounts")
         .select("id,label,account_type,broker,server,currency,current_balance,current_equity,connection_status,last_sync_at")
