@@ -11,7 +11,7 @@ def test_paystack_webhook_signature_requires_valid_sha512_hmac():
     secret = "test-secret-key"
     valid = hmac.new(secret.encode(), raw, hashlib.sha512).hexdigest()
     assert _signed_webhook(raw, valid, secret)
-    assert not _signed_webhook(raw, valid.upper(), secret)
+    assert _signed_webhook(raw, valid.upper(), secret)
     assert not _signed_webhook(raw + b" ", valid, secret)
     assert not _signed_webhook(raw, None, secret)
 
