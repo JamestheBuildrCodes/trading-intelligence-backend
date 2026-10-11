@@ -96,7 +96,10 @@ async def connect_hosted_mt5(
     """Provision an MT5 account on MetaApi. The investor password is never persisted by TradeGrid."""
     current = _account_row(db, account_id)
     require_account_feature(db, account_id, "hosted_mt5")
-    _require_hosted_worker_ready(db)
+    # Provisioning must not depend on a successful worker heartbeat: the first
+    # worker run cannot happen until an account has been provisioned. The status
+    # endpoint continues to expose worker readiness separately.
+    _provider_token()
     if current.get("connection_provider") == "metaapi" and current.get("provider_account_id"):
         raise HTTPException(
             status_code=409,
