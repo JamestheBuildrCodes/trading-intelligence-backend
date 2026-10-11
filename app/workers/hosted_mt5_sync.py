@@ -374,7 +374,7 @@ async def run_once() -> None:
     except Exception:
         status = "failed"
         safe_error = "worker_run_failed"
-        log.exception("Hosted MT5 worker run failed with a sanitized top-level error.")
+        log.error("Hosted MT5 worker run failed with safe_error_code=worker_run_failed.")
         raise
     finally:
         completed_at = datetime.now(timezone.utc)
