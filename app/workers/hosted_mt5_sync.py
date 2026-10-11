@@ -285,6 +285,10 @@ async def _sync_one(api: MetaApi, db: Client, row: dict, now: datetime) -> bool:
             # Cursor advances only after all writes for the window have succeeded.
             cursor = window_end
             chunks_done += 1
+            log.info(
+                "Hosted MT5 history batch account_id=%s batch=%s range_start=%s range_end=%s provider_deals=%s normalized_deals=%s",
+                account_id, chunks_done, cursor.isoformat(), window_end.isoformat(), len(fetched), len(normalized_deals),
+            )
             current_now = datetime.now(timezone.utc)
             complete = cursor >= now
             db.table("trading_accounts").update({
@@ -334,7 +338,7 @@ async def run_once() -> None:
     settings = get_settings()
     if not settings.metaapi_token:
         log.error("Hosted MT5 worker is not configured: METAAPI_TOKEN is missing.")
-        return
+        raise RuntimeError("METAAPI_TOKEN is missing.")
 
     db = get_supabase()
     run_result = db.table("hosted_mt5_worker_runs").insert({
@@ -358,7 +362,15 @@ async def run_once() -> None:
             .neq("hosted_connection_status", "disconnected")
             .execute()
         ).data or []
+        # Only accounts with a persisted provider ID are explicitly provisioned
+        # for hosted sync. Ignore incomplete/unconfigured rows safely.
+        rows = [row for row in rows if row.get("provider_account_id")]
+        log.info("Hosted MT5 worker discovered %s eligible hosted account(s).", len(rows))
         now = datetime.now(timezone.utc)
+        if not rows:
+            status = "failed"
+            safe_error = "no_eligible_accounts"
+            log.error("No eligible hosted MT5 accounts found; configure an authorized MetaApi account before running sync.")
         for row in rows:
             ok = await _sync_one(api, db, row, now)
             if ok:
@@ -386,6 +398,11 @@ async def run_once() -> None:
             "accounts_failed": failed,
             "safe_error_code": safe_error,
         }).eq("id", run_id).execute()
+
+    # GitHub Actions must fail visibly for partial/failed imports and for runs
+    # where no authorized hosted account was eligible; never report false success.
+    if status != "succeeded":
+        raise RuntimeError(f"Hosted MT5 sync did not fully succeed: {safe_error or status}.") 
 
 
 def main() -> None:
