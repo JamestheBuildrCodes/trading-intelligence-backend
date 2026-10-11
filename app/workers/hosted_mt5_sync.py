@@ -398,8 +398,8 @@ async def _sync_one(api: MetaApi, db: Client, row: dict, now: datetime, max_chun
             "hosted_status_updated_at": done.isoformat(),
         }).eq("id", account_id).execute()
         log.info(
-            "Hosted MT5 sync account_id=%s status=%s chunks=%s normalized_deals=%s positions=%s backfill_complete=%s",
-            account_id, final_status, chunks_done, deals_uploaded_total, len(positions or []), complete,
+            "Hosted MT5 sync account_reference=...%s status=%s chunks=%s newly_seen_deal_ids_estimate=%s positions=%s backfill_complete=%s",
+            account_id[-8:], final_status, chunks_done, deals_uploaded_total, len(positions or []), complete,
         )
         return True
     except Exception as exc:
@@ -474,6 +474,7 @@ async def run_once(account_id: str, max_chunks: int = MAX_HISTORY_CHUNKS_PER_RUN
         )
         api = MetaApi(settings.metaapi_token)
         ok = False
+        sync_attempted = False
         for attempt in range(1, max_attempts + 1):
             # Reload durable checkpoints before retrying a failed provider/database operation.
             refreshed = (
@@ -488,6 +489,7 @@ async def run_once(account_id: str, max_chunks: int = MAX_HISTORY_CHUNKS_PER_RUN
             row = refreshed.data[0]
             _validate_headway_live_account(row, account_id)
             log.info("Sync attempt %d/%d started for target_reference=...%s", attempt, max_attempts, target_label)
+            sync_attempted = True
             ok = await _sync_one(api=api, db=db, row=row, now=datetime.now(timezone.utc), max_chunks=max_chunks)
             if ok:
                 break
@@ -525,7 +527,7 @@ async def run_once(account_id: str, max_chunks: int = MAX_HISTORY_CHUNKS_PER_RUN
             log.info("The configured lookback window has been scanned. This does not prove the broker/provider retains every lifetime deal.")
         log.info("Imported deal history is distinct from sync-time balance/equity snapshots; the worker does not reconstruct historical equity.")
     except Exception as exc:
-        failed = 1 if succeeded == 0 else failed
+        failed = 1 if succeeded == 0 and locals().get("sync_attempted", False) else failed
         run_status = "failed"
         if safe_error is None:
             candidate = str(exc)
