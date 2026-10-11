@@ -37,7 +37,7 @@ def get_portfolio_growth(
         return {
             "currency": currency, "tracking_started_at": None, "latest_snapshot_at": None,
             "starting_equity": None, "latest_equity": None,
-            "net_external_cash_flow": sum(float(row["amount"]) * (1 if row["flow_type"] == "deposit" else -1) for row in flows),
+            "net_external_cash_flow": 0,
             "return_pct": None, "snapshots": [], "cash_flows": flows,
         }
 
