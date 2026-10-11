@@ -1,12 +1,13 @@
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from supabase import Client
 
 from app.db import get_supabase
 from app.deps import CurrentUser, get_current_user, require_account_owner
 from app.schemas import AccountCreate, AccountOut, AccountSettingsUpdate, ConnectorTokenOut
 from app.security import generate_connector_token
+from app.services.entitlements import get_user_entitlements
 
 router = APIRouter(prefix="/api/v1/accounts", tags=["accounts"])
 
@@ -26,6 +27,22 @@ def create_account(
     user: CurrentUser = Depends(get_current_user),
     db: Client = Depends(get_supabase),
 ):
+    entitlement = get_user_entitlements(db, user.id)
+    max_accounts = entitlement["entitlements"]["max_accounts"]
+    owned_result = db.table("trading_accounts").select("id").eq("user_id", user.id).execute()
+    owned_count = len(owned_result.data or [])
+    if max_accounts is not None and owned_count >= int(max_accounts):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "plan_limit_reached",
+                "message": f"Your {entitlement['plan'].title()} plan allows {max_accounts} active trading account(s). Remove an account or upgrade your plan to add another.",
+                "plan": entitlement["plan"],
+                "max_accounts": max_accounts,
+                "current_accounts": owned_count,
+            },
+        )
+
     row = body.model_dump()
     row["user_id"] = user.id
     row["current_balance"] = body.initial_balance
