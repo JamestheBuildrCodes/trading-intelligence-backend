@@ -87,3 +87,31 @@ Endpoints:
 History sync uses `METAAPI_INITIAL_LOOKBACK_DAYS` (default 10,000), `METAAPI_HISTORY_CHUNK_DAYS` (default 180), and `METAAPI_MAX_HISTORY_CHUNKS_PER_RUN` (default 10). The worker recursively subdivides ranges when a MetaApi request reaches the 1,000-deal response cap. If a one-second range is still saturated, it raises `history_response_limit_reached` and does not advance the cursor past that interval. A completed configured lookback does not prove the broker retained all history; reconcile imported history with the broker statement.
 
 The worker is a separate process and must not run inside the web request handler. If `METAAPI_TOKEN` is not configured, hosted provisioning remains disabled. The existing Windows MT5 bridge remains available as an alternative.
+
+## Paystack subscription billing (gated until merchant setup)
+
+TradeGrid includes a server-side Paystack billing flow. Paid checkout remains disabled until the merchant configures the provider secret and the exact plan codes in Render. No browser-supplied amount grants access.
+
+### Paystack dashboard configuration
+Create four recurring plans in **USD** with these exact amounts and intervals. A Nigerian Paystack merchant must have USD acceptance enabled (and an eligible USD settlement arrangement) before setting up these plans; account eligibility for international payments and recurring card charges is determined by Paystack, not TradeGrid.
+- TradeGrid Trader Monthly — USD 15, monthly.
+- TradeGrid Trader Annual — USD 144, annually.
+- TradeGrid Pro Monthly — USD 29, monthly.
+- TradeGrid Pro Annual — USD 288, annually.
+
+Set the resulting plan codes as `PAYSTACK_TRADER_MONTHLY_PLAN_CODE`, `PAYSTACK_TRADER_YEARLY_PLAN_CODE`, `PAYSTACK_PRO_MONTHLY_PLAN_CODE`, and `PAYSTACK_PRO_YEARLY_PLAN_CODE`. Set `PAYSTACK_SECRET_KEY` server-side, and set `APP_BASE_URL` to the real production URL. Confirm the Paystack account is enabled for USD billing and recurring card subscriptions before turning checkout on.
+
+Configure the Paystack webhook URL to:
+`https://trading-intelligence-backend.onrender.com/api/v1/billing/webhook`
+
+Checkout requires a verified Supabase email. The backend enforces the account cap in both FastAPI and an atomic PostgreSQL trigger, so concurrent account-creation requests cannot bypass a plan allowance.
+
+The webhook verifies Paystack's HMAC-SHA512 signature, verifies each successful transaction server-side, checks its reference/amount/currency/plan against a TradeGrid-created checkout intent, processes provider event IDs idempotently, and never activates an entitlement from a browser return alone. Subsequent recurring charges are linked to an existing subscription and checked against the server-configured plan amount. Failed payments move the subscription to past_due; verified cancellation events remove paid entitlements.
+
+### Endpoints
+- `GET /api/v1/billing/status` — current server-owned plan and entitlement state.
+- `POST /api/v1/billing/checkout` with `{ "plan": "trader" | "pro", "billing_period": "monthly" | "yearly" }` — creates a provider checkout session only if billing is configured.
+- `POST /api/v1/billing/cancel` — requests recurring subscription cancellation through Paystack.
+- `POST /api/v1/billing/webhook` — Paystack event receiver.
+
+Apply `database/migrations/20261011_add_paystack_billing.sql` before deploying the billing-enabled backend. The migration creates server-only subscription, checkout-intent and webhook-idempotency tables with row-level security enabled. The current enforcement gate covers account count and premium analytics modules; before accepting payment, exercise the complete first-payment, recurring-payment, failure and cancellation lifecycle with Paystack test mode and ensure plan codes/amounts match.

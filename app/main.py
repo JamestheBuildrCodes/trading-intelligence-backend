@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
-from app.routers import accounts, connector, growth, hosted_mt5, journal, overview, prop_firm, risk
+from app.routers import accounts, billing, connector, growth, hosted_mt5, journal, overview, prop_firm, risk
 
 settings = get_settings()
 
@@ -24,6 +24,7 @@ app.include_router(growth.router)
 app.include_router(prop_firm.router)
 app.include_router(risk.router)
 app.include_router(hosted_mt5.router)
+app.include_router(billing.router)
 
 
 @app.get("/health")

@@ -16,6 +16,13 @@ class Settings(BaseSettings):
     ai_daily_budget_usd: float = 1.0
     # Optional hosted MT5 provider token. Leave unset to disable cloud connections.
     metaapi_token: str | None = None
+    # Optional Paystack billing; checkout remains disabled without the secret and all plan codes.
+    paystack_secret_key: str | None = None
+    paystack_trader_monthly_plan_code: str | None = None
+    paystack_trader_yearly_plan_code: str | None = None
+    paystack_pro_monthly_plan_code: str | None = None
+    paystack_pro_yearly_plan_code: str | None = None
+    app_base_url: str = "https://trading-intelligence-ashy.vercel.app"
     allowed_origins: str = "http://localhost:3000"
 
     @model_validator(mode="after")

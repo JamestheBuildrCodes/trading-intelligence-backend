@@ -7,6 +7,7 @@ from app.config import get_settings
 from app.db import get_supabase
 from app.deps import require_account_owner
 from app.schemas import HostedMt5ConnectIn, HostedMt5ConnectOut
+from app.services.entitlements import require_account_feature
 
 router = APIRouter(prefix="/api/v1/accounts", tags=["hosted MT5"])
 
@@ -22,6 +23,58 @@ def _account_row(db: Client, account_id: str) -> dict:
     if not result.data:
         raise HTTPException(status_code=404, detail="Trading account not found.")
     return result.data[0]
+
+
+def _worker_health(db: Client) -> dict:
+    """Require a recent completed worker run before advertising cloud sync readiness."""
+    try:
+        result = (
+            db.table("hosted_mt5_worker_runs")
+            .select("started_at,completed_at,status,accounts_seen,accounts_succeeded,accounts_failed,safe_error_code")
+            .order("started_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        row = result.data[0] if result.data else None
+        if row is None or not row.get("completed_at"):
+            return {
+                "worker_ready": False,
+                "worker_status": "never_ran",
+                "worker_last_completed_at": row.get("completed_at") if row else None,
+                "worker_age_seconds": None,
+                "worker_error_code": row.get("safe_error_code") if row else None,
+            }
+        finished = datetime.fromisoformat(str(row["completed_at"]).replace("Z", "+00:00"))
+        if finished.tzinfo is None or finished.utcoffset() is None:
+            finished = finished.replace(tzinfo=timezone.utc)
+        age = max(0, int((datetime.now(timezone.utc) - finished.astimezone(timezone.utc)).total_seconds()))
+        ready = row.get("status") in ("succeeded", "partial") and age <= 900
+        return {
+            "worker_ready": ready,
+            "worker_status": row.get("status") if age <= 900 else "stale",
+            "worker_last_completed_at": finished.astimezone(timezone.utc).isoformat(),
+            "worker_age_seconds": age,
+            "worker_error_code": row.get("safe_error_code"),
+        }
+    except Exception:
+        # Missing migration/table/permissions means not ready, never optimistic.
+        return {
+            "worker_ready": False,
+            "worker_status": "health_unavailable",
+            "worker_last_completed_at": None,
+            "worker_age_seconds": None,
+            "worker_error_code": "worker_health_unavailable",
+        }
+
+
+def _require_hosted_worker_ready(db: Client) -> None:
+    token = _provider_token()
+    health = _worker_health(db)
+    if not health["worker_ready"]:
+        raise HTTPException(
+            status_code=503,
+            detail="Hosted MT5 is not ready yet. The provider token is configured but the scheduled worker has not completed a successful run in the last 15 minutes.",
+        )
 
 
 def _provider_token() -> str:
@@ -42,6 +95,8 @@ async def connect_hosted_mt5(
 ):
     """Provision an MT5 account on MetaApi. The investor password is never persisted by TradeGrid."""
     current = _account_row(db, account_id)
+    require_account_feature(db, account_id, "hosted_mt5")
+    _require_hosted_worker_ready(db)
     if current.get("connection_provider") == "metaapi" and current.get("provider_account_id"):
         raise HTTPException(
             status_code=409,
@@ -123,10 +178,16 @@ def hosted_mt5_status(
     db: Client = Depends(get_supabase),
 ):
     row = _account_row(db, account_id)
+    worker_health = _worker_health(db)
+    provider_enabled = bool(get_settings().metaapi_token)
     return {
         "account_id": account_id,
         "provider": row.get("connection_provider"),
-        "provider_enabled": bool(get_settings().metaapi_token),
+        "provider_enabled": provider_enabled,
+        "worker_ready": worker_health["worker_ready"],
+        "worker_status": worker_health["worker_status"],
+        "worker_last_completed_at": worker_health["worker_last_completed_at"],
+        "worker_age_seconds": worker_health["worker_age_seconds"],
         "configured": bool(row.get("connection_provider") == "metaapi" and row.get("provider_account_id")),
         "status": row.get("hosted_connection_status") or "not_configured",
         "provider_account_id": row.get("provider_account_id"),
@@ -150,6 +211,8 @@ async def disconnect_hosted_mt5(
     db: Client = Depends(get_supabase),
 ):
     row = _account_row(db, account_id)
+    if row.get("connection_provider") == "metaapi" and row.get("provider_account_id"):
+        require_account_feature(db, account_id, "hosted_mt5")
     provider_id = row.get("provider_account_id")
     if row.get("connection_provider") == "metaapi" and provider_id:
         token = _provider_token()

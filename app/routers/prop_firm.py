@@ -8,6 +8,7 @@ from app.deps import require_account_owner
 from app.schemas import PropFirmRulesIn
 from app.services.analytics import _closed_trades
 from app.services.prop_rules import evaluate_prop_status
+from app.services.entitlements import require_account_feature
 
 router = APIRouter(prefix="/api/v1/accounts", tags=["prop-firm rules"])
 
@@ -75,6 +76,7 @@ def get_prop_rules(
     db: Client = Depends(get_supabase),
 ):
     account = _get_account(db, account_id)
+    require_account_feature(db, account_id, "prop_firm_cockpit")
     return {
         "account_id": account_id,
         "account_label": account.get("label"),
@@ -94,6 +96,7 @@ def save_prop_rules(
 ):
     _check_rules(body)
     account = _get_account(db, account_id)
+    require_account_feature(db, account_id, "prop_firm_cockpit")
     if body.prop_firm is not None and account.get("account_type") not in ("prop_evaluation", "prop_funded", "prop"):
         # Do not silently change the account type; allow setting a prop firm on
         # a custom account, but require an explicit prop account type for clarity.
@@ -128,6 +131,7 @@ def get_prop_status(
     db: Client = Depends(get_supabase),
 ):
     account = _get_account(db, account_id)
+    require_account_feature(db, account_id, "prop_firm_cockpit")
     rules = _latest_rules(db, account_id)
     if not rules:
         return evaluate_prop_status(account, None, [], None, None)
