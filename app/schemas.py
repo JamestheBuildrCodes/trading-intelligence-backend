@@ -139,3 +139,50 @@ class TradeJournalEntryOut(TradeJournalEntryIn):
     account_id: str
     trade_id: str
     updated_at: datetime
+
+
+class PortfolioSnapshotOut(BaseModel):
+    id: str
+    account_id: str
+    snapshot_date: str
+    captured_at: datetime
+    balance: float
+    equity: float
+    currency: str
+    source: str
+
+
+class CashFlowIn(BaseModel):
+    flow_type: Literal["deposit", "withdrawal"]
+    amount: float = Field(gt=0, allow_inf_nan=False)
+    occurred_at: datetime
+    note: str = Field(default="", max_length=500)
+
+    @field_validator("occurred_at")
+    @classmethod
+    def require_cash_flow_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("occurred_at must include a timezone offset")
+        return value
+
+
+class CashFlowOut(BaseModel):
+    id: str
+    account_id: str
+    flow_type: Literal["deposit", "withdrawal"]
+    amount: float
+    occurred_at: datetime
+    note: str = ""
+    created_at: datetime
+
+
+class PortfolioGrowthOut(BaseModel):
+    currency: str
+    tracking_started_at: datetime | None
+    latest_snapshot_at: datetime | None
+    starting_equity: float | None
+    latest_equity: float | None
+    net_external_cash_flow: float
+    return_pct: float | None
+    snapshots: list[PortfolioSnapshotOut]
+    cash_flows: list[CashFlowOut]
