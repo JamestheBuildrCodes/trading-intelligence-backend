@@ -118,3 +118,24 @@ class TradeOut(BaseModel):
     session: str | None = None
     is_partial_close: bool
     rule_violations: list[str] = Field(default_factory=list)
+
+
+class TradeJournalEntryIn(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    setup_name: str = Field(default="", max_length=120)
+    thesis: str = Field(default="", max_length=4000)
+    pre_trade_emotion: str = Field(default="", max_length=80)
+    post_trade_emotion: str = Field(default="", max_length=80)
+    followed_plan: bool | None = None
+    planned_risk_amount: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    planned_reward_r: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    mistake_tags: list[str] = Field(default_factory=list, max_length=20)
+    review_notes: str = Field(default="", max_length=4000)
+
+
+class TradeJournalEntryOut(TradeJournalEntryIn):
+    id: str
+    account_id: str
+    trade_id: str
+    updated_at: datetime
