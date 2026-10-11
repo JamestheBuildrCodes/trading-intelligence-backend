@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from fastapi import HTTPException
 from supabase import Client
 
 PLAN_ENTITLEMENTS: dict[str, dict[str, Any]] = {
@@ -79,3 +80,41 @@ def get_user_entitlements(db: Client, user_id: str) -> dict[str, Any]:
         "paid": paid,
         "entitlements": dict(PLAN_ENTITLEMENTS[plan]),
     }
+
+
+def require_account_feature(db: Client, account_id: str, feature: str) -> dict[str, Any]:
+    """Enforce a plan entitlement at the backend boundary for an owned account.
+
+    Callers must still use require_account_owner on the same endpoint first;
+    this helper also checks existence so it can never infer ownership from a
+    client-supplied account UUID alone.
+    """
+    result = (
+        db.table("trading_accounts")
+        .select("id,user_id")
+        .eq("id", account_id)
+        .limit(1)
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Account not found.")
+    entitlement = get_user_entitlements(db, str(result.data[0]["user_id"]))
+    allowed = entitlement["entitlements"].get(feature)
+    if allowed is not True:
+        required_label = {
+            "advanced_cost_analysis": "Trader or Pro",
+            "prop_firm_cockpit": "Trader or Pro",
+            "portfolio_risk": "Pro",
+            "hosted_mt5": "Pro",
+        }.get(feature, "a higher plan")
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "plan_upgrade_required",
+                "feature": feature,
+                "current_plan": entitlement["plan"],
+                "required_plan": required_label,
+                "message": f"This feature requires the {required_label} plan. Your current plan is {entitlement['plan'].title()}.",
+            },
+        )
+    return entitlement
