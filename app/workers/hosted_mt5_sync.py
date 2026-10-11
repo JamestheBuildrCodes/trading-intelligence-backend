@@ -20,7 +20,7 @@ from supabase import Client
 from app.config import get_settings
 from app.db import get_supabase
 from app.services.aggregation import aggregate_position
-from app.services.metaapi_adapter import map_metaapi_deal, map_metaapi_position, parse_provider_time
+from app.services.metaapi_adapter import fetch_all_deals_for_range, map_metaapi_deal, map_metaapi_position, parse_provider_time
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("tradegrid.hosted_mt5")
@@ -50,6 +50,7 @@ def _safe_status_error(db: Client, account_id: str, code: str) -> None:
         "provider_connection_failed",
         "account_identity_mismatch",
         "history_sync_failed",
+        "history_response_limit_reached",
         "position_snapshot_failed",
         "database_write_failed",
     }
@@ -245,10 +246,7 @@ async def _sync_one(api: MetaApi, db: Client, row: dict, now: datetime) -> None:
             # SDK examples use naive UTC datetimes for time-range RPC calls.
             provider_start = cursor.astimezone(timezone.utc).replace(tzinfo=None)
             provider_end = window_end.astimezone(timezone.utc).replace(tzinfo=None)
-            fetched = await connection.get_deals_by_time_range(
-                start_time=provider_start,
-                end_time=provider_end,
-            )
+            fetched = await fetch_all_deals_for_range(connection, provider_start, provider_end)
             if fetched is None:
                 raise RuntimeError("history_sync_failed")
 
@@ -317,7 +315,7 @@ async def _sync_one(api: MetaApi, db: Client, row: dict, now: datetime) -> None:
         )
     except Exception as exc:
         exc_code = str(exc) if str(exc) in {
-            "account_identity_mismatch", "history_sync_failed", "position_snapshot_failed", "database_write_failed"
+            "account_identity_mismatch", "history_sync_failed", "history_response_limit_reached", "position_snapshot_failed", "database_write_failed"
         } else "provider_connection_failed"
         _safe_status_error(db, account_id, exc_code)
         # Never log arbitrary SDK exception text; it may carry provider/request details.
