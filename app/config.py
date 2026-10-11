@@ -34,7 +34,15 @@ class Settings(BaseSettings):
 
     @property
     def cors_origins(self) -> list[str]:
-        return [origin.strip() for origin in self.allowed_origins.split(",") if origin.strip()]
+        configured = [
+            origin.strip()
+            for origin in self.allowed_origins.split(",")
+            if origin.strip()
+        ]
+        # Keep the deployed dashboard able to call the API even if the Render
+        # environment variable still contains only the local development origin.
+        production_dashboard = "https://trading-intelligence-ashy.vercel.app"
+        return list(dict.fromkeys([*configured, production_dashboard]))
 
 
 @lru_cache
