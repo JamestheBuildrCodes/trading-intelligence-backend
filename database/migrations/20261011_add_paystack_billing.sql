@@ -80,8 +80,15 @@ begin
   where user_id = new.user_id
   limit 1;
 
+  if not found then
+    v_plan := 'free';
+    v_status := 'inactive';
+    v_period_end := null;
+  end if;
+
   if v_status not in ('active', 'trialing')
-     or (v_period_end is not null and v_period_end <= now()) then
+     or v_period_end is null
+     or v_period_end <= now() then
     v_plan := 'free';
   end if;
 
