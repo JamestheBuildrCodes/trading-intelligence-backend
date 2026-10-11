@@ -58,6 +58,41 @@ def update_account_settings(
         raise HTTPException(status_code=404, detail="Account not found.")
     return result.data[0]
 
+
+@router.delete("/{account_id}")
+def delete_account(
+    account_id: str = Depends(require_account_owner),
+    db: Client = Depends(get_supabase),
+):
+    """Permanently delete an owned account and its database-linked history.
+
+    Hosted MetaApi accounts must be disconnected first so the provider resource
+    is not orphaned. Related records are removed only where the schema defines
+    cascading foreign keys.
+    """
+    from fastapi import HTTPException
+
+    result = (
+        db.table("trading_accounts")
+        .select("id,connection_provider,provider_account_id")
+        .eq("id", account_id)
+        .limit(1)
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Account not found.")
+
+    account = result.data[0]
+    if account.get("connection_provider") == "metaapi" and account.get("provider_account_id"):
+        raise HTTPException(
+            status_code=409,
+            detail="Disconnect this hosted MT5 account before deleting it. This prevents leaving a cloud provider account running.",
+        )
+
+    db.table("trading_accounts").delete().eq("id", account_id).execute()
+    return {"account_id": account_id, "deleted": True}
+
+
 @router.post("/{account_id}/connector-tokens", response_model=ConnectorTokenOut)
 def create_connector_token(
     account_id: str = Depends(require_account_owner),
