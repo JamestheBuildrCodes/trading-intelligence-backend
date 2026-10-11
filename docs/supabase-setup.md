@@ -1,4 +1,4 @@
-# Supabase setup for Trading Intelligence
+# Supabase setup for Tradvoryx
 
 This is a one-time setup. You do not need to write application code or send credentials to anyone.
 
