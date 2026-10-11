@@ -5,7 +5,7 @@ repository secrets. The worker requires an exact target account UUID:
   python -m app.workers.hosted_mt5_sync --account-id <trading_accounts UUID>
 
 The job performs read-only RPC operations only. Broker passwords are handled by
-MetaApi at account provisioning time; TradeGrid never stores them.
+MetaApi at account provisioning time; Tradvoryx never stores them.
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ from app.services.aggregation import aggregate_position
 from app.services.metaapi_adapter import fetch_all_deals_for_range, map_metaapi_deal, map_metaapi_position, parse_provider_time
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
-log = logging.getLogger("tradegrid.hosted_mt5")
+log = logging.getLogger("tradvoryx.hosted_mt5")
 
 INITIAL_LOOKBACK_DAYS = max(365, int(os.getenv("METAAPI_INITIAL_LOOKBACK_DAYS", "10000")))
 HISTORY_CHUNK_DAYS = max(1, int(os.getenv("METAAPI_HISTORY_CHUNK_DAYS", "180")))
