@@ -126,6 +126,7 @@ def hosted_mt5_status(
     return {
         "account_id": account_id,
         "provider": row.get("connection_provider"),
+        "provider_enabled": bool(get_settings().metaapi_token),
         "configured": bool(row.get("connection_provider") == "metaapi" and row.get("provider_account_id")),
         "status": row.get("hosted_connection_status") or "not_configured",
         "provider_account_id": row.get("provider_account_id"),
