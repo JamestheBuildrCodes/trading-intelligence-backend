@@ -30,6 +30,7 @@ def _closed_trades(db: Client, account_id: str) -> list[dict]:
         .eq("account_id", account_id)
         .not_.is_("exit_at", "null")
         .order("exit_at")
+        .order("id")
     ))
 
 
@@ -173,6 +174,7 @@ def compute_trading_dna(db: Client, account_id: str, minimum_sample_size: int = 
         .eq("account_id", account_id)
         .not_.is_("exit_at", "null")
         .order("exit_at")
+        .order("id")
     ))
     return summarize_trading_dna(trades, minimum_sample_size)
 
@@ -428,5 +430,6 @@ def compute_cost_analysis(db: Client, account_id: str) -> dict:
         .select("trade_id,mistake_tags,followed_plan")
         .eq("account_id", account_id)
         .order("updated_at")
+        .order("id")
     ))
     return summarize_cost_analysis(trades, journal_entries, account_result.data[0].get("currency") or "UNKNOWN")
