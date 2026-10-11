@@ -8,9 +8,10 @@ from app.security import hash_connector_token
 
 
 class CurrentUser:
-    def __init__(self, id: str, email: str | None):
+    def __init__(self, id: str, email: str | None, email_verified: bool = False):
         self.id = id
         self.email = email
+        self.email_verified = email_verified
 
 
 def get_current_user(
@@ -47,7 +48,12 @@ def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    return CurrentUser(id=str(auth_user.id), email=getattr(auth_user, "email", None))
+    confirmed_at = getattr(auth_user, "email_confirmed_at", None) or getattr(auth_user, "confirmed_at", None)
+    return CurrentUser(
+        id=str(auth_user.id),
+        email=getattr(auth_user, "email", None),
+        email_verified=bool(confirmed_at),
+    )
 
 
 def require_account_owner(
