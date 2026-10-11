@@ -252,7 +252,7 @@ def _write_position_snapshot(
     return len(normalized_positions)
 
 
-async def _sync_one(api: MetaApi, db: Client, row: dict, now: datetime) -> bool:
+async def _sync_one(api: MetaApi, db: Client, row: dict, now: datetime, max_chunks: int) -> bool:
     account_id = str(row["id"])
     provider_id = str(row.get("provider_account_id") or "")
     if not provider_id:
@@ -311,11 +311,16 @@ async def _sync_one(api: MetaApi, db: Client, row: dict, now: datetime) -> bool:
         chunks_done = 0
         deals_uploaded_total = 0
 
-        while cursor < now and chunks_done < MAX_HISTORY_CHUNKS_PER_RUN:
+        while cursor < now and chunks_done < max_chunks:
             window_end = min(cursor + timedelta(days=HISTORY_CHUNK_DAYS), now)
-            # SDK examples use naive UTC datetimes for time-range RPC calls.
+            # SDK RPC expects naive UTC timestamps. The adapter recursively
+            # subdivides a saturated provider response before this cursor advances.
             provider_start = cursor.astimezone(timezone.utc).replace(tzinfo=None)
             provider_end = window_end.astimezone(timezone.utc).replace(tzinfo=None)
+            log.info(
+                "History window %d/%d started: start_utc=%s end_utc=%s",
+                chunks_done + 1, max_chunks, cursor.isoformat(), window_end.isoformat(),
+            )
             fetched = await fetch_all_deals_for_range(connection, provider_start, provider_end)
             if fetched is None:
                 raise RuntimeError("history_sync_failed")
@@ -332,6 +337,7 @@ async def _sync_one(api: MetaApi, db: Client, row: dict, now: datetime) -> bool:
             normalized_deals: list[dict[str, Any]] = []
             cash_flows: list[dict[str, Any]] = []
             observed_times: list[datetime] = []
+            skipped_unrecognized = 0
             for deal in ordered:
                 if not isinstance(deal, dict):
                     continue
@@ -341,11 +347,19 @@ async def _sync_one(api: MetaApi, db: Client, row: dict, now: datetime) -> bool:
                 normalized, flow = map_metaapi_deal(deal, directions)
                 if normalized is not None:
                     normalized_deals.append(normalized)
+                elif flow is None:
+                    skipped_unrecognized += 1
                 if flow is not None:
                     cash_flows.append(flow)
             _upload_cash_flows(db, account_id, cash_flows)
-            _upload_deals(db, account_id, normalized_deals)
-            deals_uploaded_total += len(normalized_deals)
+            write_stats = _upload_deals(db, account_id, normalized_deals)
+            deals_uploaded_total += write_stats["new_id_estimate"]
+            log.info(
+                "History window parsed: provider_rows=%d normalized_deals=%d cash_flows=%d skipped_unrecognized=%d "
+                "duplicate_ids_in_response=%d already_present_estimate=%d new_deal_id_estimate=%d",
+                len(fetched), len(normalized_deals), len(cash_flows), skipped_unrecognized,
+                write_stats["duplicate_input_ids"], write_stats["already_present"], write_stats["new_id_estimate"],
+            )
             if observed_times:
                 first_observed = min(observed_times)
                 last_observed = max(observed_times)
@@ -367,6 +381,10 @@ async def _sync_one(api: MetaApi, db: Client, row: dict, now: datetime) -> bool:
                 "hosted_last_error_code": None,
                 "hosted_status_updated_at": current_now.isoformat(),
             }).eq("id", account_id).execute()
+            log.info(
+                "History checkpoint saved: chunks_completed=%d cursor_utc=%s backfill_complete=%s",
+                chunks_done, cursor.isoformat(), complete,
+            )
 
         # Position sync always runs, even when this job is only part-way through backfill.
         positions = await connection.get_positions()
