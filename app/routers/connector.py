@@ -39,8 +39,9 @@ def ingest_deals(
         account_update["current_balance"] = batch.balance
     if batch.equity is not None:
         account_update["current_equity"] = batch.equity
-    account_result = db.table("trading_accounts").update(account_update).eq("id", account_id).execute()
-    account_row = (account_result.data or [{}])[0]
+    account_row_result = db.table("trading_accounts").select("currency").eq("id", account_id).limit(1).execute()
+    account_row = (account_row_result.data or [{}])[0]
+    db.table("trading_accounts").update(account_update).eq("id", account_id).execute()
 
     # Refresh today's snapshot on each sync; snapshots from prior days remain.
     if batch.balance is not None and batch.equity is not None:
