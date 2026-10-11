@@ -155,3 +155,64 @@ def map_metaapi_position(position: dict[str, Any]) -> dict[str, Any] | None:
         "risk_to_stop": None,
         "opened_at": opened_at.isoformat(),
     }
+
+
+async def fetch_all_deals_for_range(
+    connection: Any,
+    start_time: datetime,
+    end_time: datetime,
+    *,
+    response_limit: int = 1000,
+    minimum_window_seconds: float = 1.0,
+) -> list[dict[str, Any]]:
+    """Retrieve every deal in a UTC range without silently accepting the provider's 1,000-row cap.
+
+    The provider API specifies an exclusive end and a 1,000-item maximum response.
+    If a range is saturated, split it recursively into disjoint smaller windows.
+    If a sub-second window is still saturated, fail closed so the sync cursor cannot
+    advance over potentially omitted deals.
+    """
+    if end_time <= start_time:
+        return []
+    fetched = await connection.get_deals_by_time_range(
+        start_time=start_time,
+        end_time=end_time,
+    )
+    deals = list(fetched or [])
+    if len(deals) < response_limit:
+        return deals
+
+    span_seconds = (end_time - start_time).total_seconds()
+    if span_seconds <= minimum_window_seconds:
+        raise RuntimeError("history_response_limit_reached")
+
+    middle = start_time + (end_time - start_time) / 2
+    if middle <= start_time or middle >= end_time:
+        raise RuntimeError("history_response_limit_reached")
+    left = await fetch_all_deals_for_range(
+        connection, start_time, middle,
+        response_limit=response_limit,
+        minimum_window_seconds=minimum_window_seconds,
+    )
+    right = await fetch_all_deals_for_range(
+        connection, middle, end_time,
+        response_limit=response_limit,
+        minimum_window_seconds=minimum_window_seconds,
+    )
+    # Deduplicate provider IDs defensively if a provider/SDK boundary returns overlap.
+    merged: list[dict[str, Any]] = []
+    by_id: dict[str, dict[str, Any]] = {}
+    for item in left + right:
+        item_id = str(item.get("id") or item.get("ticket") or "").strip()
+        if item_id:
+            by_id[item_id] = item
+        else:
+            merged.append(item)
+    merged.extend(by_id.values())
+    merged.sort(key=lambda item: (
+        parse_provider_time(item.get("time") or item.get("dealTime"))
+        if item.get("time") or item.get("dealTime")
+        else datetime.min.replace(tzinfo=timezone.utc),
+        str(item.get("id") or item.get("ticket") or ""),
+    ))
+    return merged
