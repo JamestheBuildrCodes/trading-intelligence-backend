@@ -8,14 +8,10 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     supabase_url: str
-    # Server-only key. Never expose this as a NEXT_PUBLIC_* variable.
-    supabase_service_role_key: str
-    # Stable, random secret used to hash MT5 connector tokens. Set it explicitly.
-    connector_token_pepper: str
-    # Prefer the current server-only key. Keep the legacy field for migration.
+    # Prefer the current server-only key; support the legacy key during migration.
     supabase_secret_key: str | None = None
     supabase_service_role_key: str | None = None
-    # Required: don't silently hash connector tokens with a public default.
+    # Keep this stable after issuing connector tokens. Never use a public default.
     connector_token_pepper: str = Field(min_length=32)
     ai_daily_budget_usd: float = 1.0
     allowed_origins: str = "http://localhost:3000"
