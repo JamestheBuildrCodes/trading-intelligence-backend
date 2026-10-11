@@ -418,11 +418,25 @@ async def _sync_one(api: MetaApi, db: Client, row: dict, now: datetime, max_chun
                 pass
 
 
-async def run_once() -> None:
-    settings = get_settings()
+async def run_once(account_id: str, max_chunks: int = MAX_HISTORY_CHUNKS_PER_RUN, max_attempts: int = 2) -> None:
+    if not account_id or not account_id.strip():
+        raise RuntimeError("target_account_id_required")
+    if max_chunks < 1 or max_chunks > 50:
+        raise RuntimeError("max_history_chunks_must_be_between_1_and_50")
+
+    required = ["METAAPI_TOKEN", "SUPABASE_URL", "CONNECTOR_TOKEN_PEPPER"]
+    if not (os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY")):
+        required.append("SUPABASE_SECRET_KEY (or legacy SUPABASE_SERVICE_ROLE_KEY)")
+    missing = [name for name in required if not os.getenv(name.split(" ")[0])]
+    if missing:
+        raise RuntimeError("missing_required_configuration: " + ", ".join(missing))
+    try:
+        settings = get_settings()
+    except Exception:
+        # Pydantic validation errors can echo context; never log environment values.
+        raise RuntimeError("configuration_invalid: check required Actions secrets and key lengths") from None
     if not settings.metaapi_token:
-        log.error("Hosted MT5 worker is not configured: METAAPI_TOKEN is missing.")
-        return
+        raise RuntimeError("missing_required_configuration: METAAPI_TOKEN")
 
     db = get_supabase()
     run_result = db.table("hosted_mt5_worker_runs").insert({
@@ -430,54 +444,127 @@ async def run_once() -> None:
         "status": "running",
     }).execute()
     if not run_result.data:
-        raise RuntimeError("Could not create hosted MT5 worker-run health record.")
+        raise RuntimeError("worker_run_health_record_could_not_be_created")
     run_id = run_result.data[0]["id"]
-    completed_at = datetime.now(timezone.utc)
+    target_label = account_id[-8:]
     succeeded = 0
     failed = 0
+    complete = False
     safe_error = None
-    status = "succeeded"
+    run_status = "running"
+    log.info("Hosted MT5 worker started: target_reference=...%s max_history_chunks=%d", target_label, max_chunks)
     try:
-        api = MetaApi(settings.metaapi_token)
-        rows = (
+        target_result = (
             db.table("trading_accounts")
             .select("*")
-            .eq("connection_provider", "metaapi")
-            .neq("hosted_connection_status", "disconnected")
+            .eq("id", account_id)
+            .limit(1)
             .execute()
-        ).data or []
-        now = datetime.now(timezone.utc)
-        for row in rows:
-            ok = await _sync_one(api, db, row, now)
-            if ok:
-                succeeded += 1
-            else:
-                failed += 1
-        status = "partial" if failed and succeeded else "failed" if failed else "succeeded"
-        safe_error = "one_or_more_accounts_failed" if failed else None
-        log.info(
-            "Hosted MT5 worker run finished status=%s accounts_seen=%s accounts_succeeded=%s accounts_failed=%s",
-            status, len(rows), succeeded, failed,
         )
-    except Exception:
-        status = "failed"
-        safe_error = "worker_run_failed"
-        log.error("Hosted MT5 worker run failed with safe_error_code=worker_run_failed.")
-        raise
+        if not target_result.data:
+            raise RuntimeError("target_account_not_found")
+        row = target_result.data[0]
+        _validate_headway_live_account(row, account_id)
+        log.info(
+            "Eligible account discovered: target_reference=...%s broker=%s server=%s status=%s",
+            target_label,
+            str(row.get("broker") or "unknown")[:60],
+            str(row.get("server") or "unknown")[:80],
+            str(row.get("hosted_connection_status") or "unknown"),
+        )
+        api = MetaApi(settings.metaapi_token)
+        ok = False
+        for attempt in range(1, max_attempts + 1):
+            # Reload durable checkpoints before retrying a failed provider/database operation.
+            refreshed = (
+                db.table("trading_accounts")
+                .select("*")
+                .eq("id", account_id)
+                .limit(1)
+                .execute()
+            )
+            if not refreshed.data:
+                raise RuntimeError("target_account_disappeared_during_sync")
+            row = refreshed.data[0]
+            _validate_headway_live_account(row, account_id)
+            log.info("Sync attempt %d/%d started for target_reference=...%s", attempt, max_attempts, target_label)
+            ok = await _sync_one(api=api, db=db, row=row, now=datetime.now(timezone.utc), max_chunks=max_chunks)
+            if ok:
+                break
+            if attempt < max_attempts:
+                delay = min(5 * attempt, 15)
+                log.warning("Sync attempt failed; retrying safely after %d seconds (attempt %d/%d).", delay, attempt + 1, max_attempts)
+                await asyncio.sleep(delay)
+        if not ok:
+            failed = 1
+            safe_error = "account_sync_failed_after_retries"
+            raise RuntimeError(safe_error)
+
+        final_query = (
+            db.table("trading_accounts")
+            .select("hosted_initial_backfill_complete,hosted_history_cursor_at,hosted_first_deal_at,hosted_last_deal_at,hosted_last_sync_at")
+            .eq("id", account_id)
+            .limit(1)
+            .execute()
+        )
+        if not final_query.data:
+            raise RuntimeError("target_account_status_unavailable")
+        final_row = final_query.data[0]
+        complete = bool(final_row.get("hosted_initial_backfill_complete"))
+        succeeded = 1
+        run_status = "succeeded" if complete else "partial"
+        safe_error = None if complete else "backfill_incomplete_more_runs_required"
+        log.info(
+            "Sync attempt completed: target_reference=...%s backfill_complete=%s cursor_utc=%s earliest_observed_deal=%s latest_observed_deal=%s",
+            target_label, complete, final_row.get("hosted_history_cursor_at"),
+            final_row.get("hosted_first_deal_at"), final_row.get("hosted_last_deal_at"),
+        )
+        if not complete:
+            log.warning("This bounded run completed successfully, but the initial lookback is incomplete. Rerun the workflow to continue from the saved cursor.")
+        else:
+            log.info("The configured lookback window has been scanned. This does not prove the broker/provider retains every lifetime deal.")
+        log.info("Imported deal history is distinct from sync-time balance/equity snapshots; the worker does not reconstruct historical equity.")
+    except Exception as exc:
+        failed = 1 if succeeded == 0 else failed
+        run_status = "failed"
+        if safe_error is None:
+            candidate = str(exc)
+            safe_error = candidate if candidate.replace("_", "").replace(":", "").replace(" ", "").isalnum() and len(candidate) <= 120 else "worker_run_failed"
+        log.error("Hosted MT5 run failed safely: error_code=%s target_reference=...%s", safe_error, target_label)
+        raise RuntimeError(safe_error) from None
     finally:
-        completed_at = datetime.now(timezone.utc)
         db.table("hosted_mt5_worker_runs").update({
-            "completed_at": completed_at.isoformat(),
-            "status": status,
-            "accounts_seen": succeeded + failed,
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+            "status": run_status,
+            "accounts_seen": 1 if succeeded or failed else 0,
             "accounts_succeeded": succeeded,
             "accounts_failed": failed,
             "safe_error_code": safe_error,
         }).eq("id", run_id).execute()
+        log.info(
+            "Hosted MT5 worker finished: run_status=%s accounts_seen=%d accounts_succeeded=%d accounts_failed=%d",
+            run_status, 1 if succeeded or failed else 0, succeeded, failed,
+        )
 
 
 def main() -> None:
-    asyncio.run(run_once())
+    parser = argparse.ArgumentParser(description="Import history for one explicitly selected Headway live MT5 account.")
+    parser.add_argument("--account-id", required=True, help="Exact Supabase trading_accounts UUID for the Headway live profile.")
+    parser.add_argument(
+        "--max-history-chunks", type=int, default=MAX_HISTORY_CHUNKS_PER_RUN,
+        help="Maximum bounded history windows this invocation processes (1-50; default is 10).",
+    )
+    args = parser.parse_args()
+    try:
+        asyncio.run(run_once(account_id=args.account_id, max_chunks=args.max_history_chunks))
+    except Exception as exc:
+        # Print only a sanitized error code; never dump provider/database exceptions or secrets.
+        safe = str(exc)
+        allowed_chars = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_:- ()")
+        if not safe or len(safe) > 120 or any(char not in allowed_chars for char in safe):
+            safe = "worker_run_failed_check_configuration_database_and_provider_status"
+        log.error("Workflow should fail: error_code=%s", safe)
+        raise SystemExit(1) from None
 
 
 if __name__ == "__main__":
