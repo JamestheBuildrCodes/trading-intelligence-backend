@@ -34,7 +34,7 @@ def test_workflow_is_manual_and_requires_live_confirmation_and_secrets():
     assert "CONNECTOR_TOKEN_PEPPER: ${{ secrets.CONNECTOR_TOKEN_PEPPER }}" in text
     assert "python -m app.workers.hosted_mt5_sync" in text
     # The schedule is a commented example only, not an active trigger.
-    assert "\n# schedule:" in text
+    assert "\n#   schedule:" in text
     assert "\non:\n  schedule:" not in text
 
 
