@@ -84,6 +84,28 @@ def position_direction(deal_type: int) -> str | None:
     return None
 
 
+def cash_flow_to_payload(deal: Any) -> dict[str, Any] | None:
+    """Map MT5 balance operations to idempotent external cash-flow records.
+
+    Brokers may also use balance operations for adjustments, so the note
+    preserves the MT5 ticket and users should verify unusual entries.
+    """
+    balance_type = getattr(mt5, "DEAL_TYPE_BALANCE", None)
+    if balance_type is None or int(deal.type) != int(balance_type):
+        return None
+    amount = float(deal.profit)
+    if amount == 0:
+        return None
+    ticket = str(int(deal.ticket))
+    return {
+        "external_id": ticket,
+        "flow_type": "deposit" if amount > 0 else "withdrawal",
+        "amount": abs(amount),
+        "occurred_at": utc_from_epoch(int(deal.time)).isoformat(),
+        "note": f"Imported MT5 balance operation #{ticket}; verify broker classification",
+    }
+
+
 def deal_to_payload(deal: Any, directions: dict[str, str]) -> dict[str, Any] | None:
     entry = entry_name(int(deal.entry))
     if entry is None:
@@ -132,7 +154,11 @@ def fetch_deals(start: datetime, end: datetime) -> list[Any]:
     return sorted(deals, key=lambda item: (int(item.time), int(item.ticket)))
 
 
-def upload_batch(client: httpx.Client, deals: list[dict[str, Any]]) -> None:
+def upload_batch(
+    client: httpx.Client,
+    deals: list[dict[str, Any]],
+    cash_flows: list[dict[str, Any]] | None = None,
+) -> None:
     info = mt5.account_info()
     if info is None:
         raise RuntimeError(f"MT5 account_info failed: {mt5.last_error()}")
@@ -142,6 +168,7 @@ def upload_batch(client: httpx.Client, deals: list[dict[str, Any]]) -> None:
         headers={"X-Connector-Token": CONNECTOR_TOKEN},
         json={
             "deals": deals,
+            "cash_flows": cash_flows or [],
             "balance": float(info.balance),
             "equity": float(info.equity),
         },
@@ -160,21 +187,27 @@ def sync_window(client: httpx.Client, start: datetime, end: datetime) -> int:
     terminal_deals = fetch_deals(start, end)
     directions: dict[str, str] = {}
     payloads: list[dict[str, Any]] = []
+    cash_flows: list[dict[str, Any]] = []
     for deal in terminal_deals:
+        cash_flow = cash_flow_to_payload(deal)
+        if cash_flow is not None:
+            cash_flows.append(cash_flow)
         payload = deal_to_payload(deal, directions)
         if payload is not None:
             payloads.append(payload)
 
     # Empty syncs still update account balance/equity and connection status.
     if not payloads:
-        upload_batch(client, [])
-        log.info("No trade deals found in sync window")
+        upload_batch(client, [], cash_flows)
+        log.info("No trade deals found; imported %s cash movements", len(cash_flows))
         return 0
 
     sent = 0
     for offset in range(0, len(payloads), BATCH_SIZE):
         chunk = payloads[offset:offset + BATCH_SIZE]
-        upload_batch(client, chunk)
+        # Cash-flow tickets are sent once per sync; the backend de-duplicates
+        # by account and MT5 deal ticket if a later overlap includes them again.
+        upload_batch(client, chunk, cash_flows if offset == 0 else [])
         sent += len(chunk)
     return sent
 
