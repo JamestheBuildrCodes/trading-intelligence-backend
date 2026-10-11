@@ -1,6 +1,6 @@
 """Scheduled hosted MT5 synchronizer for MetaApi cloud accounts.
 
-Run as a Render Cron Job after setting the required secrets:
+Run manually through GitHub Actions after configuring repository secrets:
   python -m app.workers.hosted_mt5_sync
 
 The job performs read-only RPC operations only. Broker passwords are handled by
