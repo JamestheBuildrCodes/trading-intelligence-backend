@@ -358,7 +358,7 @@ def set_developer_preview(body: DeveloperPreviewRequest, user: CurrentUser = Dep
         "developer_preview_plan": body.plan,
         "updated_at": _now(),
     }).eq("user_id", user.id).eq("developer_access", True).execute()
-    return get_user_entitlements(db, user.id)
+    return billing_status(user, db)
 
 
 @router.post("/checkout")
