@@ -96,3 +96,65 @@ def compute_overview(db: Client, account_id: str) -> dict:
         "currency": account["currency"],
         "trade_count": trade_count,
     }
+
+
+
+def summarize_trading_dna(trades: list[dict], minimum_sample_size: int = 30) -> dict:
+    """Summarize closed trades by session and symbol without overstating small samples."""
+    def net(trade: dict) -> float:
+        return (
+            float(trade.get("profit") or 0)
+            + float(trade.get("commission") or 0)
+            + float(trade.get("swap") or 0)
+        )
+
+    def summarize(key: str) -> list[dict]:
+        groups: dict[str, list[dict]] = {}
+        for trade in trades:
+            raw = trade.get(key)
+            label = str(raw).strip() if raw is not None and str(raw).strip() else "unknown"
+            if key == "symbol":
+                label = label.upper()
+            groups.setdefault(label, []).append(trade)
+
+        output = []
+        for label, rows in groups.items():
+            values = [net(row) for row in rows]
+            count = len(values)
+            output.append({
+                "key": label,
+                "trade_count": count,
+                "win_rate": (sum(value > 0 for value in values) / count * 100) if count else 0.0,
+                "net_pl": sum(values),
+                "expectancy_usd": (sum(values) / count) if count else 0.0,
+            })
+        return sorted(output, key=lambda row: (-row["trade_count"], -row["net_pl"], row["key"]))
+
+    sample_size = len(trades)
+    ready = sample_size >= minimum_sample_size
+    headline = (
+        "Not enough closed trades yet. Keep journaling until the sample reaches "
+        f"{minimum_sample_size} trades."
+        if not ready
+        else "Review the session and symbol breakdowns to identify repeatable strengths and weaknesses."
+    )
+    return {
+        "ready": ready,
+        "sample_size": sample_size,
+        "minimum_sample_size": minimum_sample_size,
+        "headline": headline,
+        "by_session": summarize("session"),
+        "by_symbol": summarize("symbol"),
+    }
+
+
+def compute_trading_dna(db: Client, account_id: str, minimum_sample_size: int = 30) -> dict:
+    result = (
+        db.table("trades")
+        .select("symbol,profit,commission,swap,session,exit_at")
+        .eq("account_id", account_id)
+        .not_.is_("exit_at", "null")
+        .order("exit_at")
+        .execute()
+    )
+    return summarize_trading_dna(result.data or [], minimum_sample_size)
