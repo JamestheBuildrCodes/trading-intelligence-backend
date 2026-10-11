@@ -182,12 +182,12 @@ def _write_position_snapshot(
     return len(normalized_positions)
 
 
-async def _sync_one(api: MetaApi, db: Client, row: dict, now: datetime) -> None:
+async def _sync_one(api: MetaApi, db: Client, row: dict, now: datetime) -> bool:
     account_id = str(row["id"])
     provider_id = str(row.get("provider_account_id") or "")
     if not provider_id:
         _safe_status_error(db, account_id, "provider_account_lookup_failed")
-        return
+        return False
 
     remote = None
     connection = None
@@ -313,6 +313,7 @@ async def _sync_one(api: MetaApi, db: Client, row: dict, now: datetime) -> None:
             "Hosted MT5 sync account_id=%s status=%s chunks=%s normalized_deals=%s positions=%s backfill_complete=%s",
             account_id, final_status, chunks_done, deals_uploaded_total, len(positions or []), complete,
         )
+        return True
     except Exception as exc:
         exc_code = str(exc) if str(exc) in {
             "account_identity_mismatch", "history_sync_failed", "history_response_limit_reached", "position_snapshot_failed", "database_write_failed"
@@ -320,6 +321,7 @@ async def _sync_one(api: MetaApi, db: Client, row: dict, now: datetime) -> None:
         _safe_status_error(db, account_id, exc_code)
         # Never log arbitrary SDK exception text; it may carry provider/request details.
         log.warning("Hosted MT5 sync failed for account_id=%s error_code=%s", account_id, exc_code)
+        return False
     finally:
         if connection is not None:
             try:
@@ -335,20 +337,55 @@ async def run_once() -> None:
         return
 
     db = get_supabase()
-    api = MetaApi(settings.metaapi_token)
-    rows = (
-        db.table("trading_accounts")
-        .select("*")
-        .eq("connection_provider", "metaapi")
-        .neq("hosted_connection_status", "disconnected")
-        .execute()
-    ).data or []
-    if not rows:
-        log.info("No hosted MT5 accounts are queued.")
-        return
-    now = datetime.now(timezone.utc)
-    for row in rows:
-        await _sync_one(api, db, row, now)
+    run_result = db.table("hosted_mt5_worker_runs").insert({
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "status": "running",
+    }).execute()
+    if not run_result.data:
+        raise RuntimeError("Could not create hosted MT5 worker-run health record.")
+    run_id = run_result.data[0]["id"]
+    completed_at = datetime.now(timezone.utc)
+    succeeded = 0
+    failed = 0
+    safe_error = None
+    status = "succeeded"
+    try:
+        api = MetaApi(settings.metaapi_token)
+        rows = (
+            db.table("trading_accounts")
+            .select("*")
+            .eq("connection_provider", "metaapi")
+            .neq("hosted_connection_status", "disconnected")
+            .execute()
+        ).data or []
+        now = datetime.now(timezone.utc)
+        for row in rows:
+            ok = await _sync_one(api, db, row, now)
+            if ok:
+                succeeded += 1
+            else:
+                failed += 1
+        status = "partial" if failed and succeeded else "failed" if failed else "succeeded"
+        safe_error = "one_or_more_accounts_failed" if failed else None
+        log.info(
+            "Hosted MT5 worker run finished status=%s accounts_seen=%s accounts_succeeded=%s accounts_failed=%s",
+            status, len(rows), succeeded, failed,
+        )
+    except Exception:
+        status = "failed"
+        safe_error = "worker_run_failed"
+        log.exception("Hosted MT5 worker run failed with a sanitized top-level error.")
+        raise
+    finally:
+        completed_at = datetime.now(timezone.utc)
+        db.table("hosted_mt5_worker_runs").update({
+            "completed_at": completed_at.isoformat(),
+            "status": status,
+            "accounts_seen": succeeded + failed,
+            "accounts_succeeded": succeeded,
+            "accounts_failed": failed,
+            "safe_error_code": safe_error,
+        }).eq("id", run_id).execute()
 
 
 def main() -> None:
