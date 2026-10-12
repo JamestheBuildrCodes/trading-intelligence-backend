@@ -274,7 +274,33 @@ async def _sync_one(api: MetaApi, db: Client, row: dict, now: datetime, max_chun
             "hosted_status_updated_at": datetime.now(timezone.utc).isoformat(),
         }).eq("id", account_id).execute()
         stage = "provider_wait_connected"
-        await remote.wait_connected()
+        connect_timeout = max(30, min(300, int(os.getenv("METAAPI_CONNECT_TIMEOUT_SECONDS", "120"))))
+        log.info(
+            "MetaApi connection wait started: provider_state=%s connection_status=%s timeout_seconds=%d",
+            str(getattr(remote, "state", "unknown") or "unknown")[:40],
+            str(getattr(remote, "connection_status", getattr(remote, "connectionStatus", "unknown")) or "unknown")[:40],
+            connect_timeout,
+        )
+        try:
+            await asyncio.wait_for(remote.wait_connected(), timeout=connect_timeout)
+        except asyncio.TimeoutError:
+            # Refresh provider state for diagnostics without logging provider messages or credentials.
+            try:
+                current_remote = await api.metatrader_account_api.get_account(provider_id)
+                current_state = str(getattr(current_remote, "state", "unknown") or "unknown")[:40]
+                current_status = str(
+                    getattr(current_remote, "connection_status", getattr(current_remote, "connectionStatus", "unknown")) or "unknown"
+                )[:40]
+                log.warning(
+                    "MetaApi connection timed out: provider_state=%s connection_status=%s timeout_seconds=%d",
+                    current_state, current_status, connect_timeout,
+                )
+            except Exception as diagnostic_exc:
+                log.warning(
+                    "MetaApi connection timed out and status refresh failed: exception_type=%s",
+                    type(diagnostic_exc).__name__,
+                )
+            raise RuntimeError("provider_connection_failed") from None
 
         stage = "rpc_connect"
         connection = remote.get_rpc_connection()
