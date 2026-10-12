@@ -1,7 +1,9 @@
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from typing import Callable
+import time
 
+import httpx
 from supabase import Client
 
 
@@ -15,7 +17,17 @@ def _fetch_all_pages(query_factory: Callable[[], object], page_size: int = PAGE_
     rows: list[dict] = []
     offset = 0
     while True:
-        response = query_factory().range(offset, offset + page_size - 1).execute()
+        # Supabase/PostgREST occasionally drops a response during transient
+        # network reads. Retry transport failures only; never retry query/schema
+        # errors, and rebuild the query on each attempt.
+        for attempt in range(3):
+            try:
+                response = query_factory().range(offset, offset + page_size - 1).execute()
+                break
+            except httpx.TransportError:
+                if attempt == 2:
+                    raise
+                time.sleep(0.25 * (attempt + 1))
         page = response.data or []
         rows.extend(page)
         if len(page) < page_size:
