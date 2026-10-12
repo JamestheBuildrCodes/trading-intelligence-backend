@@ -305,7 +305,7 @@ async def _sync_one(api: MetaApi, db: Client, row: dict, now: datetime, max_chun
         if cursor is None:
             cursor = now - timedelta(days=INITIAL_LOOKBACK_DAYS)
         elif complete:
-            cursor = max(cursor - timedelta(days=INCREMENTAL_OVERLAP_DAYS), now - timedelta(days=HISTORY_CHUNK_DAYS))
+            cursor = max(cursor - timedelta(days=INCREMENTAL_OVERLAP_DAYS), now - timedelta(days=INCREMENTAL_OVERLAP_DAYS))
 
         first_deal = _time(row.get("hosted_first_deal_at"))
         last_deal = _time(row.get("hosted_last_deal_at"))
