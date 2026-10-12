@@ -408,8 +408,11 @@ async def _sync_one(api: MetaApi, db: Client, row: dict, now: datetime, max_chun
             "account_identity_mismatch", "history_sync_failed", "history_response_limit_reached", "position_snapshot_failed", "database_write_failed"
         } else "provider_connection_failed"
         _safe_status_error(db, account_id, exc_code)
-        # Never log arbitrary SDK exception text; it may carry provider/request details.
-        log.warning("Hosted MT5 sync failed for account_id=%s error_code=%s", account_id, exc_code)
+        # Record only the exception class; never log provider/request text or credentials.
+        log.warning(
+            "Hosted MT5 sync failed for account_id=%s error_code=%s exception_type=%s",
+            account_id, exc_code, type(exc).__name__,
+        )
         return False
     finally:
         if connection is not None:
