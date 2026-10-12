@@ -1,4 +1,4 @@
-"""Bounded hosted MT5 history synchronizer for one explicit Headway live account.
+"""Bounded hosted MT5 history synchronizer for one explicit Headway MT5 account (demo or live).
 
 Run through the GitHub Actions hosted history workflow after configuring
 repository secrets. The worker requires an exact target account UUID:
@@ -80,12 +80,10 @@ def _validate_headway_live_account(row: dict, expected_account_id: str) -> None:
     broker = str(row.get("broker") or "").strip().lower()
     server = str(row.get("server") or "").strip().lower()
     account_type = str(row.get("account_type") or "").strip().lower()
-    if account_type == "demo" or "demo" in server or "demo" in broker:
-        raise ValueError("demo_accounts_are_not_allowed")
+    # Remote sync is read-only, so demo accounts must be supported for setup and validation.
+    # Validate the broker identity, but do not require a live-only server name.
     if "headway" not in (broker + " " + server):
         raise ValueError("target_account_is_not_headway")
-    if not any(marker in server for marker in ("real", "live")):
-        raise ValueError("target_account_is_not_live")
     if not str(row.get("mt5_login") or "").strip() or not server:
         raise ValueError("target_account_identity_missing")
 
