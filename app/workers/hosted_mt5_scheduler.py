@@ -40,6 +40,9 @@ async def run_scheduler(account_id: str) -> None:
     interval = max(300, int(os.getenv("HOSTED_MT5_WORKER_INTERVAL_SECONDS", "600")))
     max_chunks = max(1, min(2, int(os.getenv("HOSTED_MT5_MAX_HISTORY_CHUNKS", "1"))))
     account_ref = account_id[-8:]
+    # Let Uvicorn finish serving health/API requests before synchronous Supabase
+    # calls inside the legacy worker can briefly occupy the event loop.
+    await asyncio.sleep(15)
     while True:
         try:
             log.info("Scheduled hosted MT5 sync starting for account reference ...%s", account_ref)
