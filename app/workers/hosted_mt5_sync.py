@@ -269,16 +269,22 @@ async def _sync_one(api: MetaApi, db: Client, row: dict, now: datetime, max_chun
         provider_connection_status = str(
             getattr(remote, "connection_status", getattr(remote, "connectionStatus", "")) or ""
         ).upper()
-        # A MetaApi account can be DEPLOYED while its terminal connection is
-        # DISCONNECTED. Treat that as a reconnect request instead of waiting
-        # on wait_connected() without first asking the provider to deploy it.
-        needs_deploy = (
-            not any(state in provider_state for state in ("DEPLOYED", "CONNECTED", "DEPLOYING"))
-            or provider_connection_status in {"DISCONNECTED", "DISCONNECTING", "UNDEPLOYED"}
-        )
-        if needs_deploy:
+        # DEPLOYED is not sufficient: the provider can report a disconnected
+        # terminal. In that case explicitly redeploy the existing account to
+        # restart its API server; do not create a second provider account.
+        disconnected_states = {
+            "DISCONNECTED", "DISCONNECTED_FROM_BROKER", "DISCONNECTING", "UNDEPLOYED"
+        }
+        if provider_state == "DEPLOYED" and provider_connection_status in disconnected_states:
             log.info(
-                "Requesting MetaApi deploy/reconnect: provider_state=%s connection_status=%s",
+                "Requesting MetaApi redeploy: provider_state=%s connection_status=%s",
+                provider_state[:40] or "unknown",
+                provider_connection_status[:40] or "unknown",
+            )
+            await remote.redeploy()
+        elif provider_state not in {"DEPLOYED", "CONNECTED", "DEPLOYING"}:
+            log.info(
+                "Requesting MetaApi deploy: provider_state=%s connection_status=%s",
                 provider_state[:40] or "unknown",
                 provider_connection_status[:40] or "unknown",
             )
