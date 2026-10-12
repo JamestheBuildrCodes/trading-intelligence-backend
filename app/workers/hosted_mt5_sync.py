@@ -49,6 +49,7 @@ def _safe_status_error(db: Client, account_id: str, code: str) -> None:
     # Fixed allow-listed codes only; never persist arbitrary provider exception text.
     allowed = {
         "provider_account_lookup_failed",
+        "provider_deployment_forbidden",
         "provider_connection_failed",
         "account_identity_mismatch",
         "history_sync_failed",
@@ -64,7 +65,7 @@ def _safe_status_error(db: Client, account_id: str, code: str) -> None:
     db.table("trading_accounts").update({"connection_status": "error"}).eq("id", account_id).execute()
 
 
-def _validate_headway_live_account(row: dict, expected_account_id: str) -> None:
+def _validate_headway_account(row: dict, expected_account_id: str) -> None:
     """Reject every account except the explicitly selected hosted Headway live profile."""
     if str(row.get("id") or "") != expected_account_id:
         raise ValueError("target_account_id_mismatch")
@@ -279,6 +280,7 @@ async def _sync_one(api: MetaApi, db: Client, row: dict, now: datetime, max_chun
                 provider_state[:40] or "unknown",
                 provider_connection_status[:40] or "unknown",
             )
+            stage = "provider_redeploy"
             await remote.redeploy()
         elif provider_state not in {"DEPLOYED", "CONNECTED", "DEPLOYING"}:
             log.info(
@@ -286,6 +288,7 @@ async def _sync_one(api: MetaApi, db: Client, row: dict, now: datetime, max_chun
                 provider_state[:40] or "unknown",
                 provider_connection_status[:40] or "unknown",
             )
+            stage = "provider_deploy"
             await remote.deploy()
         db.table("trading_accounts").update({
             "hosted_connection_status": "connecting",
@@ -460,8 +463,12 @@ async def _sync_one(api: MetaApi, db: Client, row: dict, now: datetime, max_chun
         known_code = str(exc) if str(exc) in {
             "account_identity_mismatch", "history_sync_failed", "history_response_limit_reached", "position_snapshot_failed", "database_write_failed"
         } else None
+        if type(exc).__name__ == "ForbiddenException" and stage in {"provider_deploy", "provider_redeploy"}:
+            known_code = "provider_deployment_forbidden"
         stage_codes = {
             "provider_account_lookup": "provider_account_lookup_failed",
+            "provider_deploy": "provider_deployment_forbidden",
+            "provider_redeploy": "provider_deployment_forbidden",
             "provider_wait_connected": "provider_connection_failed",
             "rpc_connect": "provider_connection_failed",
             "rpc_wait_synchronized": "provider_connection_failed",
@@ -532,7 +539,7 @@ async def run_once(account_id: str, max_chunks: int = MAX_HISTORY_CHUNKS_PER_RUN
         if not target_result.data:
             raise RuntimeError("target_account_not_found")
         row = target_result.data[0]
-        _validate_headway_live_account(row, account_id)
+        _validate_headway_account(row, account_id)
         log.info(
             "Eligible account discovered: target_reference=...%s broker=%s server=%s status=%s",
             target_label,
@@ -606,9 +613,9 @@ async def run_once(account_id: str, max_chunks: int = MAX_HISTORY_CHUNKS_PER_RUN
                 "worker_run_health_record_could_not_be_created", "target_account_not_found",
                 "target_account_disappeared_during_sync", "target_account_status_unavailable",
                 "target_account_id_mismatch", "target_account_not_hosted", "provider_account_id_missing",
-                "target_account_disconnected", "target_account_status_invalid", "demo_accounts_are_not_allowed",
-                "target_account_is_not_headway", "target_account_is_not_live", "target_account_identity_missing",
-                "account_sync_failed_after_retries", "backfill_incomplete_more_runs_required",
+                "target_account_disconnected", "target_account_status_invalid",
+                "target_account_is_not_headway", "target_account_identity_missing",
+                "provider_deployment_forbidden", "provider_deployment_forbidden", "account_sync_failed_after_retries", "backfill_incomplete_more_runs_required",
             }
             safe_error = candidate if candidate in known_codes else "worker_run_failed"
         log.error("Hosted MT5 run failed safely: error_code=%s target_reference=...%s", safe_error, target_label)
@@ -629,8 +636,8 @@ async def run_once(account_id: str, max_chunks: int = MAX_HISTORY_CHUNKS_PER_RUN
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Import history for one explicitly selected Headway live MT5 account.")
-    parser.add_argument("--account-id", required=True, help="Exact Supabase trading_accounts UUID for the Headway live profile.")
+    parser = argparse.ArgumentParser(description="Import history for one explicitly selected Headway MT5 account (demo or live).")
+    parser.add_argument("--account-id", required=True, help="Exact Supabase trading_accounts UUID for the Headway MT5 profile.")
     parser.add_argument(
         "--max-history-chunks", type=int, default=MAX_HISTORY_CHUNKS_PER_RUN,
         help="Maximum bounded history windows this invocation processes (1-50; default is 10).",
@@ -646,8 +653,8 @@ def main() -> None:
             "worker_run_health_record_could_not_be_created", "target_account_not_found",
             "target_account_disappeared_during_sync", "target_account_status_unavailable",
             "target_account_id_mismatch", "target_account_not_hosted", "provider_account_id_missing",
-            "target_account_disconnected", "target_account_status_invalid", "demo_accounts_are_not_allowed",
-            "target_account_is_not_headway", "target_account_is_not_live", "target_account_identity_missing",
+            "target_account_disconnected", "target_account_status_invalid",
+            "target_account_is_not_headway", "target_account_identity_missing",
             "account_sync_failed_after_retries", "backfill_incomplete_more_runs_required",
             "configuration_invalid: check required Actions secrets and key lengths",
         }
