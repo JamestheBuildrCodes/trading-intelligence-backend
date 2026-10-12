@@ -262,6 +262,7 @@ async def _sync_one(api: MetaApi, db: Client, row: dict, now: datetime, max_chun
 
     remote = None
     connection = None
+    stage = "provider_account_lookup"
     try:
         remote = await api.metatrader_account_api.get_account(provider_id)
         provider_state = str(getattr(remote, "state", "") or "").upper()
@@ -272,12 +273,16 @@ async def _sync_one(api: MetaApi, db: Client, row: dict, now: datetime, max_chun
             "hosted_last_error_code": None,
             "hosted_status_updated_at": datetime.now(timezone.utc).isoformat(),
         }).eq("id", account_id).execute()
+        stage = "provider_wait_connected"
         await remote.wait_connected()
 
+        stage = "rpc_connect"
         connection = remote.get_rpc_connection()
         await connection.connect()
+        stage = "rpc_wait_synchronized"
         await connection.wait_synchronized()
 
+        stage = "account_information"
         info = await connection.get_account_information()
         if not isinstance(info, dict):
             raise ValueError("account_identity_mismatch")
@@ -322,6 +327,7 @@ async def _sync_one(api: MetaApi, db: Client, row: dict, now: datetime, max_chun
                 "History window %d/%d started: start_utc=%s end_utc=%s",
                 chunks_done + 1, max_chunks, cursor.isoformat(), window_end.isoformat(),
             )
+            stage = "history_fetch"
             fetched = await fetch_all_deals_for_range(connection, provider_start, provider_end)
             if fetched is None:
                 raise RuntimeError("history_sync_failed")
@@ -388,7 +394,9 @@ async def _sync_one(api: MetaApi, db: Client, row: dict, now: datetime, max_chun
             )
 
         # Position sync always runs, even when this job is only part-way through backfill.
+        stage = "positions_fetch"
         positions = await connection.get_positions()
+        stage = "position_snapshot_write"
         _write_position_snapshot(db, row, info, positions or [], datetime.now(timezone.utc))
         final_status = "connected" if complete else "syncing"
         done = datetime.now(timezone.utc)
@@ -404,14 +412,25 @@ async def _sync_one(api: MetaApi, db: Client, row: dict, now: datetime, max_chun
         )
         return True
     except Exception as exc:
-        exc_code = str(exc) if str(exc) in {
+        known_code = str(exc) if str(exc) in {
             "account_identity_mismatch", "history_sync_failed", "history_response_limit_reached", "position_snapshot_failed", "database_write_failed"
-        } else "provider_connection_failed"
+        } else None
+        stage_codes = {
+            "provider_account_lookup": "provider_account_lookup_failed",
+            "provider_wait_connected": "provider_connection_failed",
+            "rpc_connect": "provider_connection_failed",
+            "rpc_wait_synchronized": "provider_connection_failed",
+            "account_information": "provider_connection_failed",
+            "history_fetch": "history_sync_failed",
+            "positions_fetch": "position_snapshot_failed",
+            "position_snapshot_write": "database_write_failed",
+        }
+        exc_code = known_code or stage_codes.get(stage, "provider_connection_failed")
         _safe_status_error(db, account_id, exc_code)
-        # Record only the exception class; never log provider/request text or credentials.
+        # Log only the operation and exception class; never log provider/request text.
         log.warning(
-            "Hosted MT5 sync failed for account_id=%s error_code=%s exception_type=%s",
-            account_id, exc_code, type(exc).__name__,
+            "Hosted MT5 sync failed for account_id=%s stage=%s error_code=%s exception_type=%s",
+            account_id, stage, exc_code, type(exc).__name__,
         )
         return False
     finally:
