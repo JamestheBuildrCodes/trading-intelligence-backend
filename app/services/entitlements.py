@@ -14,17 +14,43 @@ PLAN_ENTITLEMENTS: dict[str, dict[str, Any]] = {
 }
 
 
+def _subscription_row(db: Client, user_id: str) -> tuple[dict[str, Any] | None, bool]:
+    """Read subscription data, falling back safely if the optional developer migration is absent.
+
+    The fallback intentionally disables the developer override rather than granting it
+    implicitly. This keeps account creation and ordinary paid-plan checks operational
+    while a production database migration is pending.
+    """
+    table = db.table("user_subscriptions")
+    try:
+        response = (
+            table.select("plan,status,billing_period,current_period_end,cancel_at_period_end,developer_access,developer_preview_plan")
+            .eq("user_id", user_id)
+            .limit(1)
+            .execute()
+        )
+        return (response.data[0] if response.data else None), True
+    except Exception as exc:
+        error_text = str(exc)
+        missing_optional_columns = (
+            ("developer_access" in error_text or "developer_preview_plan" in error_text)
+            and ("42703" in error_text or "does not exist" in error_text)
+        )
+        if not missing_optional_columns:
+            raise
+        response = (
+            table.select("plan,status,billing_period,current_period_end,cancel_at_period_end")
+            .eq("user_id", user_id)
+            .limit(1)
+            .execute()
+        )
+        return (response.data[0] if response.data else None), False
+
+
 def get_user_entitlements(db: Client, user_id: str) -> dict[str, Any]:
     """Resolve subscription entitlements and the server-owned developer override."""
-    response = (
-        db.table("user_subscriptions")
-        .select("plan,status,billing_period,current_period_end,cancel_at_period_end,developer_access,developer_preview_plan")
-        .eq("user_id", user_id)
-        .limit(1)
-        .execute()
-    )
-    row = response.data[0] if response.data else None
-    developer_access = bool(row and row.get("developer_access"))
+    row, developer_columns_available = _subscription_row(db, user_id)
+    developer_access = bool(developer_columns_available and row and row.get("developer_access"))
     paid = bool(row and row.get("status") in ("active", "trialing"))
     period_end = row.get("current_period_end") if row else None
     if paid:
