@@ -266,7 +266,22 @@ async def _sync_one(api: MetaApi, db: Client, row: dict, now: datetime, max_chun
     try:
         remote = await api.metatrader_account_api.get_account(provider_id)
         provider_state = str(getattr(remote, "state", "") or "").upper()
-        if not any(state in provider_state for state in ("DEPLOYED", "CONNECTED", "DEPLOYING")):
+        provider_connection_status = str(
+            getattr(remote, "connection_status", getattr(remote, "connectionStatus", "")) or ""
+        ).upper()
+        # A MetaApi account can be DEPLOYED while its terminal connection is
+        # DISCONNECTED. Treat that as a reconnect request instead of waiting
+        # on wait_connected() without first asking the provider to deploy it.
+        needs_deploy = (
+            not any(state in provider_state for state in ("DEPLOYED", "CONNECTED", "DEPLOYING"))
+            or provider_connection_status in {"DISCONNECTED", "DISCONNECTING", "UNDEPLOYED"}
+        )
+        if needs_deploy:
+            log.info(
+                "Requesting MetaApi deploy/reconnect: provider_state=%s connection_status=%s",
+                provider_state[:40] or "unknown",
+                provider_connection_status[:40] or "unknown",
+            )
             await remote.deploy()
         db.table("trading_accounts").update({
             "hosted_connection_status": "connecting",
