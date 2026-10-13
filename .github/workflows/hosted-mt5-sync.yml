@@ -1,12 +1,12 @@
-name: Hosted MT5 cloud sync
+name: TickerAll hosted MT5 cloud sync
 
 on:
-  # Scheduled runs are paused until the MetaApi token/workspace and saved provider IDs are reconciled.
+  # Scheduled runs are paused until the TickerAll token/workspace and saved provider IDs are reconciled.
   # Use workflow_dispatch for a controlled test after configuration is verified.
   workflow_dispatch:
     inputs:
       account_id:
-        description: "Optional exact trading_accounts UUID; leave blank to sync all connected MetaApi accounts"
+        description: "Optional exact trading_accounts UUID; leave blank to sync all connected TickerAll accounts"
         required: false
         type: string
       max_history_chunks:
@@ -34,7 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
-      METAAPI_TOKEN: ${{ secrets.METAAPI_TOKEN }}
+      TICKERALL_API_KEY: ${{ secrets.TICKERALL_API_KEY }}
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
       CONNECTOR_TOKEN_PEPPER: ${{ secrets.CONNECTOR_TOKEN_PEPPER }}
@@ -58,7 +58,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for name in METAAPI_TOKEN SUPABASE_URL SUPABASE_SECRET_KEY CONNECTOR_TOKEN_PEPPER; do
+          for name in TICKERALL_API_KEY SUPABASE_URL SUPABASE_SECRET_KEY CONNECTOR_TOKEN_PEPPER; do
             if [[ -z "${!name:-}" ]]; then
               echo "::error::Required GitHub Actions secret is missing: $name"
               exit 1
@@ -77,7 +77,7 @@ jobs:
           else
             curl --fail --silent --show-error --get "$SUPABASE_URL/rest/v1/trading_accounts" \
               --data-urlencode "select=id" \
-              --data-urlencode "connection_provider=eq.metaapi" \
+              --data-urlencode "connection_provider=eq.tickerall" \
               --data-urlencode "provider_account_id=not.is.null" \
               --data-urlencode "hosted_connection_status=not.eq.disconnected" \
               -H "apikey: $SUPABASE_SECRET_KEY" \
@@ -95,7 +95,7 @@ jobs:
         run: python -m pytest -q
 
       - name: Verify worker CLI
-        run: python -m app.workers.hosted_mt5_sync --help
+        run: python -m app.workers.tickerall_sync --help
 
       - name: Sync all selected accounts
         shell: bash
@@ -104,7 +104,7 @@ jobs:
         run: |
           set -uo pipefail
           if [[ -z "${ACCOUNT_IDS//[$'\\r\\n ']/}" ]]; then
-            echo "No active MetaApi-hosted accounts are registered yet; nothing to sync."
+            echo "No active TickerAll-hosted accounts are registered yet; nothing to sync."
             exit 0
           fi
           failed=0
@@ -113,7 +113,7 @@ jobs:
             [[ -z "$account_id" ]] && continue
             seen=$((seen + 1))
             echo "Starting hosted sync for account reference ...${account_id: -8}"
-            if python -m app.workers.hosted_mt5_sync --account-id "$account_id" --max-history-chunks "$MAX_HISTORY_CHUNKS"; then
+            if python -m app.workers.tickerall_sync --account-id "$account_id" --max-history-chunks "$MAX_HISTORY_CHUNKS"; then
               echo "Hosted sync completed for account reference ...${account_id: -8}"
             else
               echo "::warning::Hosted sync failed for account reference ...${account_id: -8}; continuing with other accounts."
