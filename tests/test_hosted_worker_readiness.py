@@ -9,6 +9,8 @@ class FakeQuery:
         self.rows = rows
     def select(self, _columns):
         return self
+    def eq(self, _column, _value):
+        return self
     def order(self, _column, desc=False):
         return self
     def limit(self, _count):
@@ -38,7 +40,7 @@ def test_hosted_worker_requires_recent_completed_success():
         "accounts_failed": 0,
         "safe_error_code": None,
     }])
-    result = _worker_health(fresh)
+    result = _worker_health(fresh, 'c5688758-a78a-482e-aae7-ceb782c0984a')
     assert result["worker_ready"] is True
     assert result["worker_status"] == "succeeded"
 
@@ -54,7 +56,7 @@ def test_partial_worker_run_is_ready_only_inside_health_window():
         "accounts_failed": 1,
         "safe_error_code": "one_or_more_accounts_failed",
     }])
-    result = _worker_health(partial)
+    result = _worker_health(partial, 'c5688758-a78a-482e-aae7-ceb782c0984a')
     assert result["worker_ready"] is True
     assert result["worker_status"] == "partial"
 
@@ -70,11 +72,11 @@ def test_stale_or_missing_worker_run_is_not_ready():
         "accounts_failed": 0,
         "safe_error_code": None,
     }])
-    assert _worker_health(stale)["worker_ready"] is False
-    assert _worker_health(FakeDB([]))["worker_status"] == "never_ran"
+    assert _worker_health(stale, 'c5688758-a78a-482e-aae7-ceb782c0984a')["worker_ready"] is False
+    assert _worker_health(FakeDB([]), 'c5688758-a78a-482e-aae7-ceb782c0984a')["worker_status"] == "never_ran"
 
 
 def test_missing_worker_health_table_fails_closed():
-    result = _worker_health(FakeDB(should_raise=True))
+    result = _worker_health(FakeDB(should_raise=True), 'c5688758-a78a-482e-aae7-ceb782c0984a')
     assert result["worker_ready"] is False
     assert result["worker_status"] == "health_unavailable"

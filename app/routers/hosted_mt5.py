@@ -25,12 +25,13 @@ def _account_row(db: Client, account_id: str) -> dict:
     return result.data[0]
 
 
-def _worker_health(db: Client) -> dict:
+def _worker_health(db: Client, account_id: str) -> dict:
     """Require a recent completed worker run before advertising cloud sync readiness."""
     try:
         result = (
             db.table("hosted_mt5_worker_runs")
             .select("started_at,completed_at,status,accounts_seen,accounts_succeeded,accounts_failed,safe_error_code")
+            .eq("account_id", account_id)
             .order("started_at", desc=True)
             .limit(1)
             .execute()
@@ -171,7 +172,7 @@ def hosted_mt5_status(
     db: Client = Depends(get_supabase),
 ):
     row = _account_row(db, account_id)
-    worker_health = _worker_health(db)
+    worker_health = _worker_health(db, account_id)
     provider_enabled = bool(get_settings().metaapi_token)
     return {
         "account_id": account_id,
