@@ -68,6 +68,21 @@ def _worker_health(db: Client, account_id: str) -> dict:
         }
 
 
+def _safe_provider_failure(candidate: str, detail: object) -> dict[str, str]:
+    """Return a bounded, user-safe provider diagnostic without upstream payloads."""
+    if isinstance(detail, dict):
+        failure_code = detail.get("code")
+        failure_message = detail.get("message")
+    else:
+        failure_code = f"{candidate}_rejected"
+        failure_message = detail if isinstance(detail, str) else None
+    return {
+        "provider": candidate,
+        "code": str(failure_code)[:80] if failure_code else f"{candidate}_rejected",
+        "message": str(failure_message)[:500] if failure_message else f"{candidate} rejected the connection request.",
+    }
+
+
 def _tickerall_token() -> str:
     token = get_settings().tickerall_api_key
     if not token:
@@ -211,17 +226,7 @@ async def connect_hosted_mt5(
             detail = exc.detail
             # Preserve only provider identifiers and safe, authored diagnostics.
             # Never return raw upstream bodies, request headers, logins, or passwords.
-            if isinstance(detail, dict):
-                failure_code = detail.get("code")
-                failure_message = detail.get("message")
-            else:
-                failure_code = f"{candidate}_rejected"
-                failure_message = detail if isinstance(detail, str) else None
-            provider_failures.append({
-                "provider": candidate,
-                "code": str(failure_code)[:80] if failure_code else f"{candidate}_rejected",
-                "message": str(failure_message)[:500] if failure_message else f"{candidate} rejected the connection request.",
-            })
+            provider_failures.append(_safe_provider_failure(candidate, detail))
             # Automatic mode tries the next configured provider if this one
             # rejects the plan, broker/server, credentials, or provisioning.
             if body.provider != "auto":
