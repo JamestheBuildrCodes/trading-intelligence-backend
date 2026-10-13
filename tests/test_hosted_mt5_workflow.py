@@ -10,7 +10,7 @@ import pytest
 from app.workers import hosted_mt5_sync as worker
 
 
-LIVE_ACCOUNT = {
+HOSTED_ACCOUNT = {
     "id": "c5688758-a78a-482e-aae7-ceb782c0984a",
     "account_type": "personal",
     "broker": "Headway",
@@ -91,7 +91,7 @@ def test_missing_secrets_fail_without_initializing_database(monkeypatch):
     ):
         monkeypatch.delenv(name, raising=False)
     with pytest.raises(RuntimeError, match="missing_required_configuration"):
-        asyncio.run(worker.run_once(LIVE_ACCOUNT["id"], max_chunks=1))
+        asyncio.run(worker.run_once(HOSTED_ACCOUNT["id"], max_chunks=1))
 
 
 class FakeQuery:
@@ -164,12 +164,12 @@ def _deal(deal_id: str, position_id: str = "position-1"):
 
 
 def test_upload_deals_deduplicates_inputs_and_does_not_overwrite_existing(monkeypatch):
-    db = FakeDB(existing={(LIVE_ACCOUNT["id"], "already-imported")})
+    db = FakeDB(existing={(HOSTED_ACCOUNT["id"], "already-imported")})
     aggregated = []
     monkeypatch.setattr(worker, "aggregate_position", lambda _db, account, position: aggregated.append((account, position)))
     result = worker._upload_deals(
         db,
-        LIVE_ACCOUNT["id"],
+        HOSTED_ACCOUNT["id"],
         [_deal("new-deal"), _deal("already-imported"), _deal("new-deal")],
     )
     assert result["unique_deals"] == 2
@@ -179,14 +179,14 @@ def test_upload_deals_deduplicates_inputs_and_does_not_overwrite_existing(monkey
     assert db.upserts[0]["on_conflict"] == "account_id,mt5_deal_id"
     assert db.upserts[0]["ignore_duplicates"] is True
     assert len(db.upserts[0]["rows"]) == 2
-    assert aggregated == [(LIVE_ACCOUNT["id"], "position-1")]
+    assert aggregated == [(HOSTED_ACCOUNT["id"], "position-1")]
 
 
 def test_upload_deals_uses_bounded_batches(monkeypatch):
     db = FakeDB()
     monkeypatch.setattr(worker, "aggregate_position", lambda *_args: None)
     deals = [_deal(f"deal-{i}", f"position-{i}") for i in range(1201)]
-    result = worker._upload_deals(db, LIVE_ACCOUNT["id"], deals)
+    result = worker._upload_deals(db, HOSTED_ACCOUNT["id"], deals)
     assert [len(batch["rows"]) for batch in db.upserts] == [500, 500, 201]
     assert result["unique_deals"] == 1201
     assert result["new_id_estimate"] == 1201
@@ -196,4 +196,4 @@ def test_database_write_errors_are_not_silently_swallowed(monkeypatch):
     db = FakeDB(fail_upsert=True)
     monkeypatch.setattr(worker, "aggregate_position", lambda *_args: None)
     with pytest.raises(RuntimeError, match="simulated database write error"):
-        worker._upload_deals(db, LIVE_ACCOUNT["id"], [_deal("new-deal")])
+        worker._upload_deals(db, HOSTED_ACCOUNT["id"], [_deal("new-deal")])
