@@ -39,8 +39,8 @@ jobs:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
       CONNECTOR_TOKEN_PEPPER: ${{ secrets.CONNECTOR_TOKEN_PEPPER }}
-      TARGET_ACCOUNT_ID: ${{ inputs.account_id }}
-      MAX_HISTORY_CHUNKS: ${{ inputs.max_history_chunks || '2' }}
+      TARGET_ACCOUNT_ID: ${{ github.event.inputs.account_id || '' }}
+      MAX_HISTORY_CHUNKS: ${{ github.event.inputs.max_history_chunks || '2' }}
       PYTHONUNBUFFERED: "1"
       PYTHONPATH: .
     steps:
