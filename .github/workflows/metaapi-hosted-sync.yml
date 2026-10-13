@@ -1,0 +1,119 @@
+name: MetaApi hosted MT5 cloud sync
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+    inputs:
+      account_id:
+        description: "Optional exact trading_accounts UUID; leave blank to sync all connected MetaApi accounts"
+        required: false
+        type: string
+      max_history_chunks:
+        description: "Maximum 180-day history windows per account in this run"
+        required: true
+        type: choice
+        options: ["1", "2", "5", "10", "20"]
+        default: "2"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: metaapi-hosted-mt5-sync
+  cancel-in-progress: false
+
+jobs:
+  hosted-sync:
+    name: Sync MetaApi-hosted MT5 accounts
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      METAAPI_TOKEN: ${{ secrets.METAAPI_TOKEN }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+      CONNECTOR_TOKEN_PEPPER: ${{ secrets.CONNECTOR_TOKEN_PEPPER }}
+      TARGET_ACCOUNT_ID: ${{ github.event.inputs.account_id || '' }}
+      MAX_HISTORY_CHUNKS: ${{ github.event.inputs.max_history_chunks || '2' }}
+      PYTHONUNBUFFERED: "1"
+      PYTHONPATH: .
+    steps:
+      - name: Check out backend
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Validate secrets and discover MetaApi accounts
+        id: targets
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in METAAPI_TOKEN SUPABASE_URL SUPABASE_SECRET_KEY CONNECTOR_TOKEN_PEPPER; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "::error::Required GitHub Actions secret is missing: $name"
+              exit 1
+            fi
+          done
+          if (( ${#CONNECTOR_TOKEN_PEPPER} < 32 )); then
+            echo "::error::CONNECTOR_TOKEN_PEPPER must contain at least 32 characters."
+            exit 1
+          fi
+          if [[ -n "$TARGET_ACCOUNT_ID" ]]; then
+            if [[ ! "$TARGET_ACCOUNT_ID" =~ ^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$ ]]; then
+              echo "::error::account_id must be a valid Supabase UUID."
+              exit 1
+            fi
+            printf 'account_ids=%s\n' "$TARGET_ACCOUNT_ID" >> "$GITHUB_OUTPUT"
+          else
+            curl --fail --silent --show-error --get "$SUPABASE_URL/rest/v1/trading_accounts" \
+              --data-urlencode "select=id" \
+              --data-urlencode "connection_provider=eq.metaapi" \
+              --data-urlencode "provider_account_id=not.is.null" \
+              --data-urlencode "hosted_connection_status=not.eq.disconnected" \
+              -H "apikey: $SUPABASE_SECRET_KEY" \
+              -H "Authorization: Bearer $SUPABASE_SECRET_KEY" |
+              python -c 'import json, os, sys; rows=json.load(sys.stdin); ids=[str(r["id"]) for r in rows if r.get("id")]; f=open(os.environ["GITHUB_OUTPUT"], "a"); f.write("account_ids<<EOF"+chr(10)+chr(10).join(ids)+chr(10)+"EOF"+chr(10)); f.close()'
+          fi
+          echo "MetaApi account selection prepared; account IDs and secret values are not printed."
+
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Run backend tests
+        run: python -m pytest -q
+
+      - name: Verify MetaApi worker CLI
+        run: python -m app.workers.hosted_mt5_sync --help
+
+      - name: Sync selected MetaApi accounts
+        shell: bash
+        env:
+          ACCOUNT_IDS: ${{ steps.targets.outputs.account_ids }}
+        run: |
+          set -uo pipefail
+          if [[ -z "${ACCOUNT_IDS//[$'\\r\\n ']/}" ]]; then
+            echo "No active MetaApi-hosted accounts are registered yet; nothing to sync."
+            exit 0
+          fi
+          failed=0
+          seen=0
+          while IFS= read -r account_id; do
+            [[ -z "$account_id" ]] && continue
+            seen=$((seen + 1))
+            echo "Starting MetaApi sync for account reference ...${account_id: -8}"
+            if python -m app.workers.hosted_mt5_sync --account-id "$account_id" --max-history-chunks "$MAX_HISTORY_CHUNKS"; then
+              echo "MetaApi sync completed for account reference ...${account_id: -8}"
+            else
+              echo "::warning::MetaApi sync failed for account reference ...${account_id: -8}; continuing with other accounts."
+              failed=$((failed + 1))
+            fi
+          done <<< "$ACCOUNT_IDS"
+          echo "Processed $seen MetaApi account(s); failures: $failed."
+          if (( failed > 0 )); then exit 1; fi
