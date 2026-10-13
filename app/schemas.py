@@ -305,6 +305,7 @@ class HostedMt5ConnectIn(BaseModel):
     server: str = Field(min_length=1, max_length=150)
     investor_password: str = Field(min_length=1, max_length=200)
     acknowledge_cloud_storage: Literal[True]
+    provider: Literal["tickerall", "metaapi"] = "tickerall"
 
     @field_validator("login", "server")
     @classmethod
