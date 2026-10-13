@@ -332,7 +332,8 @@ def billing_status(user: CurrentUser = Depends(get_current_user), db: Client = D
     current = _current_subscription(db, user.id)
     settings = get_settings()
     billing_configured = bool(
-        settings.paystack_secret_key
+        not settings.beta_free_all_features
+        and settings.paystack_secret_key
         and all(getattr(settings, item["setting"], None) for item in PLANS.values())
     )
     return {
@@ -364,6 +365,8 @@ def set_developer_preview(body: DeveloperPreviewRequest, user: CurrentUser = Dep
 @router.post("/checkout")
 def start_checkout(body: CheckoutRequest, user: CurrentUser = Depends(get_current_user), db: Client = Depends(get_supabase)):
     current = get_user_entitlements(db, user.id)
+    if get_settings().beta_free_all_features:
+        raise HTTPException(status_code=403, detail="Paid checkout is paused during the free beta. All plans and features are temporarily unlocked.")
     if current.get("developer_access"):
         raise HTTPException(status_code=403, detail="Developer accounts are exempt from paid checkout.")
     if not user.email or not user.email_verified:
