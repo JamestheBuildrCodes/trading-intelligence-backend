@@ -114,21 +114,54 @@ async def connect_hosted_mt5(
             "reliability": "high",
         })
     except Exception as exc:
-        # Never store/log provider messages; some errors may include user-supplied fields.
-        code = getattr(exc, "details", None)
-        safe_code = code if code in {"E_AUTH", "E_SRV_NOT_FOUND", "E_SERVER_TIMEZONE"} else "provider_provisioning_failed"
+        # Provider SDK errors vary by endpoint/version: details may be a string or
+        # a nested object. Normalize only known codes; never return raw provider
+        # messages because they can contain credentials or account identifiers.
+        details = getattr(exc, "details", None)
+        candidates = []
+        if isinstance(details, str):
+            candidates.append(details)
+        elif isinstance(details, dict):
+            candidates.extend([
+                details.get("code"),
+                details.get("errorCode"),
+                details.get("details"),
+            ])
+        candidates.extend([
+            getattr(exc, "code", None),
+            getattr(exc, "error_code", None),
+        ])
+        known_codes = {
+            "E_AUTH",
+            "E_SRV_NOT_FOUND",
+            "E_SERVER_TIMEZONE",
+            "E_RESOURCE_SLOTS",
+            "E_NO_SYMBOLS",
+            "E_PASSWORD_CHANGE_REQUIRED",
+            "E_TRADING_ACCOUNT_DISABLED",
+            "ERR_OTP_REQUIRED",
+            "provider_deployment_forbidden",
+        }
+        safe_code = next(
+            (str(candidate) for candidate in candidates
+             if isinstance(candidate, str) and candidate in known_codes),
+            "provider_provisioning_failed",
+        )
+        messages = {
+            "E_AUTH": "The broker rejected these credentials. Use the MT5 investor/read-only password and verify the account login and server.",
+            "E_SRV_NOT_FOUND": "MetaApi could not find this exact broker server. Copy the server name from the MT5 terminal, including its demo/live suffix.",
+            "E_SERVER_TIMEZONE": "MetaApi could not detect this server's settings right now. Retry later; if it persists, the server may need a MetaApi provisioning profile.",
+            "E_RESOURCE_SLOTS": "This MT5 account needs more MetaApi resource slots than are currently available. Check the MetaApi account's resource-slot allowance before retrying.",
+            "E_NO_SYMBOLS": "The broker account has no symbols configured for MetaApi. Confirm the account is enabled and its broker has configured symbols.",
+            "E_PASSWORD_CHANGE_REQUIRED": "The broker requires a password change before this account can connect. Update the password with the broker, then retry.",
+            "E_TRADING_ACCOUNT_DISABLED": "The broker reports that this trading account is disabled. Enable it with the broker before retrying.",
+            "ERR_OTP_REQUIRED": "This account requires one-time-password authentication, which hosted MT5 cannot complete. Disable OTP for the account or use another account.",
+            "provider_deployment_forbidden": "The MetaApi token lacks permission to provision or deploy hosted trading accounts. The service operator must grant the required account-management/deployment permissions to the MetaApi token.",
+            "provider_provisioning_failed": "MetaApi could not complete hosted-account provisioning. Check the exact broker server and confirm the MetaApi token has account-management permissions. No password was saved in Tradvoryx.",
+        }
         raise HTTPException(
             status_code=502,
-            detail={
-                "code": safe_code,
-                "message": (
-                    "The broker rejected the supplied credentials. Use the MT5 investor/read-only password and verify login/server."
-                    if safe_code == "E_AUTH"
-                    else "The provider could not identify this broker server. Check the exact MT5 server name or ask support about a provisioning profile."
-                    if safe_code == "E_SRV_NOT_FOUND"
-                    else "Hosted MT5 provisioning did not complete. Verify the broker server and try again; no password was saved in Tradvoryx."
-                ),
-            },
+            detail={"code": safe_code, "message": messages[safe_code]},
         ) from None
 
     try:
