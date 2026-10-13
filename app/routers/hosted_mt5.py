@@ -197,6 +197,7 @@ async def connect_hosted_mt5(
     mapped_status = "connecting"
     provider_resource: object | None = None
     last_error: HTTPException | None = None
+    provider_failures: list[dict[str, str]] = []
     for candidate in candidates:
         try:
             if candidate == "tickerall":
@@ -207,6 +208,20 @@ async def connect_hosted_mt5(
             break
         except HTTPException as exc:
             last_error = exc
+            detail = exc.detail
+            # Preserve only provider identifiers and safe, authored diagnostics.
+            # Never return raw upstream bodies, request headers, logins, or passwords.
+            if isinstance(detail, dict):
+                failure_code = detail.get("code")
+                failure_message = detail.get("message")
+            else:
+                failure_code = f"{candidate}_rejected"
+                failure_message = detail if isinstance(detail, str) else None
+            provider_failures.append({
+                "provider": candidate,
+                "code": str(failure_code)[:80] if failure_code else f"{candidate}_rejected",
+                "message": str(failure_message)[:500] if failure_message else f"{candidate} rejected the connection request.",
+            })
             # Automatic mode tries the next configured provider if this one
             # rejects the plan, broker/server, credentials, or provisioning.
             if body.provider != "auto":
@@ -216,33 +231,27 @@ async def connect_hosted_mt5(
                 status_code=502,
                 detail={"code": f"{candidate}_unreachable", "message": f"Tradvoryx could not reach {candidate}. Retry shortly; no broker password was saved by Tradvoryx."},
             )
+            provider_failures.append({
+                "provider": candidate,
+                "code": f"{candidate}_unreachable",
+                "message": f"Tradvoryx could not reach {candidate}. Retry shortly; no broker password was saved by Tradvoryx.",
+            })
             if body.provider != "auto":
                 raise last_error
     if not provider:
         if last_error is not None:
-            failures = []
-            # Only expose safe, authored provider messages; never provider response bodies,
-            # request headers, login details, or credentials.
-            if last_error.detail:
-                detail = last_error.detail
-                if isinstance(detail, dict):
-                    safe_message = detail.get("message")
-                    if isinstance(safe_message, str) and safe_message.strip():
-                        failures.append(safe_message.strip())
-                elif isinstance(detail, str):
-                    failures.append(detail.strip())
-            failure_summary = " ".join(failures)
             fallback_message = (
-                "No configured provider could connect this account. For a live account, "
-                "TickerAll requires a Trader or Pro plan for API access; MetaApi also "
-                "needs available deployment capacity/permissions. Confirm the exact broker "
-                "server and investor password, then retry with an explicitly selected provider."
+                "All configured hosted providers failed to connect this account. "
+                "Use the provider-specific results to identify whether the blocker is "
+                "plan eligibility, provider credentials/capacity, broker authentication, "
+                "or the exact broker server. Do not keep retrying unchanged credentials."
             )
             raise HTTPException(
                 status_code=502,
                 detail={
                     "code": "all_hosted_providers_failed",
-                    "message": (failure_summary + " " + fallback_message).strip() if failure_summary else fallback_message,
+                    "message": fallback_message,
+                    "provider_failures": provider_failures,
                 },
             )
         raise HTTPException(status_code=502, detail="No hosted provider could connect this MT5 account.")
