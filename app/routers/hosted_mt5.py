@@ -68,12 +68,12 @@ def _worker_health(db: Client, account_id: str) -> dict:
         }
 
 
-def _provider_token() -> str:
-    token = get_settings().metaapi_token
+def _tickerall_token() -> str:
+    token = get_settings().tickerall_api_key
     if not token:
         raise HTTPException(
             status_code=503,
-            detail="Hosted MT5 is not enabled yet. The service operator must configure METAAPI_TOKEN and deploy the hosted sync worker.",
+            detail="Hosted MT5 is not enabled yet. The service operator must configure TICKERALL_API_KEY in Render.",
         )
     return token
 
@@ -84,118 +84,100 @@ async def connect_hosted_mt5(
     account_id: str = Depends(require_account_owner),
     db: Client = Depends(get_supabase),
 ):
-    """Provision an MT5 account on MetaApi. The investor password is never persisted by Tradvoryx."""
+    """Create a read-only hosted TickerAll session. Broker passwords are never persisted by Tradvoryx."""
     current = _account_row(db, account_id)
     require_account_feature(db, account_id, "hosted_mt5")
-    # Provisioning must not depend on a successful worker heartbeat: the first
-    # worker run cannot happen until an account has been provisioned. The status
-    # endpoint continues to expose worker readiness separately.
-    _provider_token()
-    if current.get("connection_provider") == "metaapi" and current.get("provider_account_id"):
+    token = _tickerall_token()
+    if current.get("connection_provider") == "tickerall" and current.get("provider_account_id"):
         raise HTTPException(
             status_code=409,
-            detail="This Tradvoryx account already has a hosted provider connection. Refresh its status or disconnect it before reconnecting.",
+            detail="This Tradvoryx account already has a TickerAll hosted connection. Refresh its status or disconnect it before reconnecting.",
         )
+    if not body.login.isdigit():
+        raise HTTPException(status_code=422, detail="The MT5 login must contain only the numeric broker account number.")
 
-    token = _provider_token()
+    import httpx
+
     try:
-        from metaapi_cloud_sdk import MetaApi
-
-        api = MetaApi(token)
-        remote = await api.metatrader_account_api.create_account({
-            "name": f"Tradvoryx · {current.get('label') or 'MT5 account'}",
-            "type": "cloud",
-            "login": body.login,
-            "password": body.investor_password,
-            "server": body.server,
-            "platform": "mt5",
-            "application": "MetaApi",
-            "magic": 730041,
-            "reliability": "high",
-        })
+        async with httpx.AsyncClient(timeout=httpx.Timeout(35.0, connect=10.0)) as client:
+            response = await client.post(
+                "https://api.tickerall.com/v1/sessions",
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                json={
+                    "broker": "mt5",
+                    "server": body.server,
+                    "account": int(body.login),
+                    "password": body.investor_password,
+                    "terminalType": "MOBILE",
+                },
+            )
+        if response.status_code >= 400:
+            provider_error = {}
+            try:
+                provider_error = response.json()
+            except Exception:
+                pass
+            code = str(provider_error.get("error") or "tickerall_session_failed")
+            safe_messages = {
+                "UNAUTHORIZED": "TickerAll rejected the API key. Check TICKERALL_API_KEY in Render.",
+                "BROKER_AUTH_FAILED": "The broker rejected the MT5 login/password/server combination. Confirm the exact server and investor/read-only password.",
+                "BROKER_UNREACHABLE": "TickerAll could not reach the broker. Retry shortly and verify the broker server.",
+                "FREE_TIER_LIVE_REJECTED": "TickerAll's current plan does not permit this live account through the API. Check the plan requirements before retrying.",
+            }
+            raise HTTPException(
+                status_code=502,
+                detail={"code": code if code in safe_messages else "tickerall_session_failed",
+                        "message": safe_messages.get(code, "TickerAll could not establish the hosted MT5 session. Verify the broker server and account credentials, then retry.")},
+            )
+        remote = response.json()
+        provider_id = str(remote.get("accountId") or "").strip()
+        if not provider_id:
+            raise HTTPException(status_code=502, detail={"code": "tickerall_invalid_response", "message": "TickerAll did not return a hosted account ID. No connection was saved."})
+    except HTTPException:
+        raise
     except Exception as exc:
-        # Provider SDK errors vary by endpoint/version: details may be a string or
-        # a nested object. Normalize only known codes; never return raw provider
-        # messages because they can contain credentials or account identifiers.
-        details = getattr(exc, "details", None)
-        candidates = []
-        if isinstance(details, str):
-            candidates.append(details)
-        elif isinstance(details, dict):
-            candidates.extend([
-                details.get("code"),
-                details.get("errorCode"),
-                details.get("details"),
-            ])
-        candidates.extend([
-            getattr(exc, "code", None),
-            getattr(exc, "error_code", None),
-        ])
-        known_codes = {
-            "E_AUTH",
-            "E_SRV_NOT_FOUND",
-            "E_SERVER_TIMEZONE",
-            "E_RESOURCE_SLOTS",
-            "E_NO_SYMBOLS",
-            "E_PASSWORD_CHANGE_REQUIRED",
-            "E_TRADING_ACCOUNT_DISABLED",
-            "ERR_OTP_REQUIRED",
-            "provider_deployment_forbidden",
-        }
-        safe_code = next(
-            (str(candidate) for candidate in candidates
-             if isinstance(candidate, str) and candidate in known_codes),
-            "provider_provisioning_failed",
-        )
-        messages = {
-            "E_AUTH": "The broker rejected these credentials. Use the MT5 investor/read-only password and verify the account login and server.",
-            "E_SRV_NOT_FOUND": "MetaApi could not find this exact broker server. Copy the server name from the MT5 terminal, including its demo/live suffix.",
-            "E_SERVER_TIMEZONE": "MetaApi could not detect this server's settings right now. Retry later; if it persists, the server may need a MetaApi provisioning profile.",
-            "E_RESOURCE_SLOTS": "This MT5 account needs more MetaApi resource slots than are currently available. Check the MetaApi account's resource-slot allowance before retrying.",
-            "E_NO_SYMBOLS": "The broker account has no symbols configured for MetaApi. Confirm the account is enabled and its broker has configured symbols.",
-            "E_PASSWORD_CHANGE_REQUIRED": "The broker requires a password change before this account can connect. Update the password with the broker, then retry.",
-            "E_TRADING_ACCOUNT_DISABLED": "The broker reports that this trading account is disabled. Enable it with the broker before retrying.",
-            "ERR_OTP_REQUIRED": "This account requires one-time-password authentication, which hosted MT5 cannot complete. Disable OTP for the account or use another account.",
-            "provider_deployment_forbidden": "The MetaApi token lacks permission to provision or deploy hosted trading accounts. The service operator must grant the required account-management/deployment permissions to the MetaApi token.",
-            "provider_provisioning_failed": "MetaApi could not complete hosted-account provisioning. Check the exact broker server and confirm the MetaApi token has account-management permissions. No password was saved in Tradvoryx.",
-        }
         raise HTTPException(
             status_code=502,
-            detail={"code": safe_code, "message": messages[safe_code]},
+            detail={"code": "tickerall_unreachable", "message": "Tradvoryx could not reach TickerAll. Retry shortly; no broker password was saved."},
         ) from None
 
+    provider_status = str(remote.get("status") or "connected").lower()
+    mapped_status = "connected" if provider_status in {"connected", "online"} else "connecting"
     try:
-        provider_id = str(remote.id)
         db.table("trading_accounts").update({
-            "connection_provider": "metaapi",
+            "connection_provider": "tickerall",
             "provider_account_id": provider_id,
-            "hosted_connection_status": "provisioning",
+            "hosted_connection_status": mapped_status,
             "hosted_last_error_code": None,
             "hosted_history_cursor_at": None,
             "hosted_initial_backfill_complete": False,
             "hosted_first_deal_at": None,
             "hosted_last_deal_at": None,
-            "hosted_connection_verified_at": None,
+            "hosted_connection_verified_at": datetime.now(timezone.utc).isoformat() if mapped_status == "connected" else None,
             "hosted_last_sync_at": None,
-            "broker": current.get("broker") or "MetaApi hosted MT5",
+            "broker": current.get("broker") or "MT5",
             "server": body.server,
             "mt5_login": body.login,
             "hosted_status_updated_at": datetime.now(timezone.utc).isoformat(),
         }).eq("id", account_id).execute()
     except Exception:
-        # Avoid orphaning the provider account if our persistence step fails.
+        # Best-effort cleanup if Tradvoryx cannot persist the connection reference.
         try:
-            await remote.remove()
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                await client.delete(
+                    f"https://api.tickerall.com/v1/sessions/{provider_id}",
+                    headers={"Authorization": f"Bearer {token}"},
+                )
         except Exception:
             pass
-        raise HTTPException(status_code=500, detail="The hosted account was created by the provider but Tradvoryx could not save its connection state. Contact support before retrying.") from None
+        raise HTTPException(status_code=500, detail="TickerAll connected the broker, but Tradvoryx could not save the connection state. Contact support before retrying.") from None
 
     return {
         "account_id": account_id,
-        "provider": "metaapi",
-        "status": "provisioning",
+        "provider": "tickerall",
+        "status": mapped_status,
         "provider_account_id": provider_id,
-        "message": "Hosted account provisioning started. The background worker will connect, import history and update the connection status.",
+        "message": "TickerAll connected the MT5 account. Next, run the hosted history sync to import trades and verify account data.",
     }
 
 
@@ -206,7 +188,7 @@ def hosted_mt5_status(
 ):
     row = _account_row(db, account_id)
     worker_health = _worker_health(db, account_id)
-    provider_enabled = bool(get_settings().metaapi_token)
+    provider_enabled = bool(get_settings().tickerall_api_key) if row.get("connection_provider") in (None, "tickerall") else bool(get_settings().metaapi_token)
     return {
         "account_id": account_id,
         "provider": row.get("connection_provider"),
@@ -215,7 +197,7 @@ def hosted_mt5_status(
         "worker_status": worker_health["worker_status"],
         "worker_last_completed_at": worker_health["worker_last_completed_at"],
         "worker_age_seconds": worker_health["worker_age_seconds"],
-        "configured": bool(row.get("connection_provider") == "metaapi" and row.get("provider_account_id")),
+        "configured": bool(row.get("connection_provider") in ("metaapi", "tickerall") and row.get("provider_account_id")),
         "status": row.get("hosted_connection_status") or "not_configured",
         "provider_account_id": row.get("provider_account_id"),
         "last_error_code": row.get("hosted_last_error_code"),
@@ -226,7 +208,7 @@ def hosted_mt5_status(
         "last_sync_at": row.get("hosted_last_sync_at"),
         "message": (
             "This account uses hosted MT5. Tradvoryx's browser does not need your desktop terminal."
-            if row.get("connection_provider") == "metaapi" and row.get("provider_account_id")
+            if row.get("connection_provider") in ("metaapi", "tickerall") and row.get("provider_account_id")
             else "No hosted MT5 connection is configured for this account."
         ),
     }
@@ -238,11 +220,30 @@ async def disconnect_hosted_mt5(
     db: Client = Depends(get_supabase),
 ):
     row = _account_row(db, account_id)
-    if row.get("connection_provider") == "metaapi" and row.get("provider_account_id"):
+    if row.get("connection_provider") in ("metaapi", "tickerall") and row.get("provider_account_id"):
         require_account_feature(db, account_id, "hosted_mt5")
     provider_id = row.get("provider_account_id")
-    if row.get("connection_provider") == "metaapi" and provider_id:
-        token = _provider_token()
+    if row.get("connection_provider") == "tickerall" and provider_id:
+        token = _tickerall_token()
+        import httpx
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                response = await client.delete(
+                    f"https://api.tickerall.com/v1/sessions/{provider_id}",
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+            if response.status_code not in (200, 204):
+                raise RuntimeError("tickerall_disconnect_failed")
+        except Exception:
+            db.table("trading_accounts").update({
+                "hosted_connection_status": "error",
+                "hosted_last_error_code": "provider_disconnect_failed",
+            }).eq("id", account_id).execute()
+            raise HTTPException(status_code=502, detail="TickerAll did not confirm disconnection. The connection remains recorded so it can be retried safely.") from None
+    elif row.get("connection_provider") == "metaapi" and provider_id:
+        token = get_settings().metaapi_token
+        if not token:
+            raise HTTPException(status_code=503, detail="This is a legacy MetaApi connection. Configure METAAPI_TOKEN temporarily to disconnect it safely, or contact support.")
         try:
             from metaapi_cloud_sdk import MetaApi
 
