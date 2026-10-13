@@ -1,6 +1,6 @@
-"""Bounded hosted MT5 history synchronizer for one explicit Headway MT5 account (demo or live).
+"""Bounded hosted MT5 history synchronizer for one explicitly selected MetaApi-hosted MT5 account (demo or live).
 
-Run through the GitHub Actions hosted history workflow after configuring
+Run through the scheduled GitHub Actions hosted history workflow after configuring
 repository secrets. The worker requires an exact target account UUID:
   python -m app.workers.hosted_mt5_sync --account-id <trading_accounts UUID>
 
@@ -65,8 +65,8 @@ def _safe_status_error(db: Client, account_id: str, code: str) -> None:
     db.table("trading_accounts").update({"connection_status": "error"}).eq("id", account_id).execute()
 
 
-def _validate_headway_account(row: dict, expected_account_id: str) -> None:
-    """Reject every account except the explicitly selected hosted Headway live profile."""
+def _validate_hosted_account(row: dict, expected_account_id: str) -> None:
+    """Validate the exact connected MetaApi account without restricting broker or demo/live type."""
     if str(row.get("id") or "") != expected_account_id:
         raise ValueError("target_account_id_mismatch")
     if str(row.get("connection_provider") or "").lower() != "metaapi":
@@ -78,15 +78,9 @@ def _validate_headway_account(row: dict, expected_account_id: str) -> None:
         raise ValueError("target_account_disconnected")
     if status not in {"provisioning", "connecting", "connected", "syncing", "error"}:
         raise ValueError("target_account_status_invalid")
-    broker = str(row.get("broker") or "").strip().lower()
-    server = str(row.get("server") or "").strip().lower()
-    account_type = str(row.get("account_type") or "").strip().lower()
-    # Remote sync is read-only, so demo accounts must be supported for setup and validation.
-    # Validate the broker identity, but do not require a live-only server name.
-    if "headway" not in (broker + " " + server):
-        raise ValueError("target_account_is_not_headway")
-    if not str(row.get("mt5_login") or "").strip() or not server:
+    if not str(row.get("mt5_login") or "").strip() or not str(row.get("server") or "").strip():
         raise ValueError("target_account_identity_missing")
+
 
 def _latest_position_snapshot(db: Client, account_id: str) -> dict | None:
     result = (
@@ -539,7 +533,7 @@ async def run_once(account_id: str, max_chunks: int = MAX_HISTORY_CHUNKS_PER_RUN
         if not target_result.data:
             raise RuntimeError("target_account_not_found")
         row = target_result.data[0]
-        _validate_headway_account(row, account_id)
+        _validate_hosted_account(row, account_id)
         log.info(
             "Eligible account discovered: target_reference=...%s broker=%s server=%s status=%s",
             target_label,
@@ -562,7 +556,7 @@ async def run_once(account_id: str, max_chunks: int = MAX_HISTORY_CHUNKS_PER_RUN
             if not refreshed.data:
                 raise RuntimeError("target_account_disappeared_during_sync")
             row = refreshed.data[0]
-            _validate_headway_live_account(row, account_id)
+            _validate_hosted_account(row, account_id)
             log.info("Sync attempt %d/%d started for target_reference=...%s", attempt, max_attempts, target_label)
             sync_attempted = True
             ok = await _sync_one(api=api, db=db, row=row, now=datetime.now(timezone.utc), max_chunks=max_chunks)
@@ -614,7 +608,7 @@ async def run_once(account_id: str, max_chunks: int = MAX_HISTORY_CHUNKS_PER_RUN
                 "target_account_disappeared_during_sync", "target_account_status_unavailable",
                 "target_account_id_mismatch", "target_account_not_hosted", "provider_account_id_missing",
                 "target_account_disconnected", "target_account_status_invalid",
-                "target_account_is_not_headway", "target_account_identity_missing",
+                "target_account_identity_missing",
                 "provider_deployment_forbidden", "provider_deployment_forbidden", "account_sync_failed_after_retries", "backfill_incomplete_more_runs_required",
             }
             safe_error = candidate if candidate in known_codes else "worker_run_failed"
@@ -636,8 +630,8 @@ async def run_once(account_id: str, max_chunks: int = MAX_HISTORY_CHUNKS_PER_RUN
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Import history for one explicitly selected Headway MT5 account (demo or live).")
-    parser.add_argument("--account-id", required=True, help="Exact Supabase trading_accounts UUID for the Headway MT5 profile.")
+    parser = argparse.ArgumentParser(description="Import history for one explicitly selected MetaApi-hosted MT5 account (demo or live).")
+    parser.add_argument("--account-id", required=True, help="Exact Supabase trading_accounts UUID for the MetaApi-hosted MT5 profile.")
     parser.add_argument(
         "--max-history-chunks", type=int, default=MAX_HISTORY_CHUNKS_PER_RUN,
         help="Maximum bounded history windows this invocation processes (1-50; default is 10).",
