@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import os
 from typing import Any
 
 from fastapi import HTTPException
 
 from app.config import get_settings
 from supabase import Client
+
+def _beta_free_all_features() -> bool:
+    """Read the beta switch without requiring unrelated production secrets in unit tests."""
+    return os.getenv("BETA_FREE_ALL_FEATURES", "true").strip().lower() not in {"0", "false", "no", "off"}
+
 
 PLAN_ENTITLEMENTS: dict[str, dict[str, Any]] = {
     "free": {"max_accounts": 1, "full_history_analytics": True, "advanced_cost_analysis": False, "portfolio_risk": False, "prop_firm_cockpit": False, "hosted_mt5": False, "ai_coach_monthly_messages": 0},
@@ -90,7 +96,8 @@ def get_user_entitlements(db: Client, user_id: str) -> dict[str, Any]:
         "paid": paid and not developer_access,
         "developer_access": developer_access,
         "developer_preview_plan": plan if developer_access else None,
-        "entitlements": dict(PLAN_ENTITLEMENTS[plan]),
+        "entitlements": dict(PLAN_ENTITLEMENTS["enterprise"] if _beta_free_all_features() else PLAN_ENTITLEMENTS[plan]),
+        "beta_access": _beta_free_all_features(),
     }
 
 
