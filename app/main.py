@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
-from app.routers import accounts, billing, connector, growth, hosted_mt5, journal, overview, prop_firm, risk
+from app.routers import accounts, backtesting, billing, connector, growth, hosted_mt5, journal, overview, prop_firm, risk
 
 logger = logging.getLogger("tradvoryx.hosted_mt5.scheduler")
 settings = get_settings()
@@ -45,6 +45,7 @@ app.add_middleware(
 )
 
 app.include_router(accounts.router)
+app.include_router(backtesting.router)
 app.include_router(connector.router)
 app.include_router(overview.router)
 app.include_router(journal.router)
