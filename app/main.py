@@ -39,6 +39,9 @@ app = FastAPI(title="Tradvoryx API", version="0.1.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
+    # Permit only this Vercel project's immutable deployment aliases for preview
+    # checks; keep unrelated *.vercel.app origins blocked.
+    allow_origin_regex=r"https://tradvoryx-[a-z0-9-]+-mastr-buildrs-projects\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
