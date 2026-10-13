@@ -78,24 +78,125 @@ def _provider_token() -> str:
     return token
 
 
-@router.post("/{account_id}/hosted-mt5", status_code=status.HTTP_410_GONE)
+@router.post("/{account_id}/hosted-mt5", response_model=HostedMt5ConnectOut, status_code=status.HTTP_202_ACCEPTED)
 async def connect_hosted_mt5(
     body: HostedMt5ConnectIn,
     account_id: str = Depends(require_account_owner),
     db: Client = Depends(get_supabase),
 ):
-    """Retire new MetaApi provisioning; use the free account-scoped MT5 bridge instead."""
-    raise HTTPException(
-        status_code=status.HTTP_410_GONE,
-        detail={
-            "code": "hosted_provider_retired",
-            "message": (
-                "New MetaApi hosted-account provisioning has been retired in Tradvoryx. "
-                "Use the free read-only Windows MT5 bridge from the Connect page. "
-                "A logged-in MT5 terminal and the bridge process must remain running to sync."
-            ),
-        },
-    )
+    """Provision an MT5 account on MetaApi. The investor password is never persisted by Tradvoryx."""
+    current = _account_row(db, account_id)
+    require_account_feature(db, account_id, "hosted_mt5")
+    # Provisioning must not depend on a successful worker heartbeat: the first
+    # worker run cannot happen until an account has been provisioned. The status
+    # endpoint continues to expose worker readiness separately.
+    _provider_token()
+    if current.get("connection_provider") == "metaapi" and current.get("provider_account_id"):
+        raise HTTPException(
+            status_code=409,
+            detail="This Tradvoryx account already has a hosted provider connection. Refresh its status or disconnect it before reconnecting.",
+        )
+
+    token = _provider_token()
+    try:
+        from metaapi_cloud_sdk import MetaApi
+
+        api = MetaApi(token)
+        remote = await api.metatrader_account_api.create_account({
+            "name": f"Tradvoryx · {current.get('label') or 'MT5 account'}",
+            "type": "cloud",
+            "login": body.login,
+            "password": body.investor_password,
+            "server": body.server,
+            "platform": "mt5",
+            "application": "MetaApi",
+            "magic": 730041,
+            "reliability": "high",
+        })
+    except Exception as exc:
+        # Provider SDK errors vary by endpoint/version: details may be a string or
+        # a nested object. Normalize only known codes; never return raw provider
+        # messages because they can contain credentials or account identifiers.
+        details = getattr(exc, "details", None)
+        candidates = []
+        if isinstance(details, str):
+            candidates.append(details)
+        elif isinstance(details, dict):
+            candidates.extend([
+                details.get("code"),
+                details.get("errorCode"),
+                details.get("details"),
+            ])
+        candidates.extend([
+            getattr(exc, "code", None),
+            getattr(exc, "error_code", None),
+        ])
+        known_codes = {
+            "E_AUTH",
+            "E_SRV_NOT_FOUND",
+            "E_SERVER_TIMEZONE",
+            "E_RESOURCE_SLOTS",
+            "E_NO_SYMBOLS",
+            "E_PASSWORD_CHANGE_REQUIRED",
+            "E_TRADING_ACCOUNT_DISABLED",
+            "ERR_OTP_REQUIRED",
+            "provider_deployment_forbidden",
+        }
+        safe_code = next(
+            (str(candidate) for candidate in candidates
+             if isinstance(candidate, str) and candidate in known_codes),
+            "provider_provisioning_failed",
+        )
+        messages = {
+            "E_AUTH": "The broker rejected these credentials. Use the MT5 investor/read-only password and verify the account login and server.",
+            "E_SRV_NOT_FOUND": "MetaApi could not find this exact broker server. Copy the server name from the MT5 terminal, including its demo/live suffix.",
+            "E_SERVER_TIMEZONE": "MetaApi could not detect this server's settings right now. Retry later; if it persists, the server may need a MetaApi provisioning profile.",
+            "E_RESOURCE_SLOTS": "This MT5 account needs more MetaApi resource slots than are currently available. Check the MetaApi account's resource-slot allowance before retrying.",
+            "E_NO_SYMBOLS": "The broker account has no symbols configured for MetaApi. Confirm the account is enabled and its broker has configured symbols.",
+            "E_PASSWORD_CHANGE_REQUIRED": "The broker requires a password change before this account can connect. Update the password with the broker, then retry.",
+            "E_TRADING_ACCOUNT_DISABLED": "The broker reports that this trading account is disabled. Enable it with the broker before retrying.",
+            "ERR_OTP_REQUIRED": "This account requires one-time-password authentication, which hosted MT5 cannot complete. Disable OTP for the account or use another account.",
+            "provider_deployment_forbidden": "The MetaApi token lacks permission to provision or deploy hosted trading accounts. The service operator must grant the required account-management/deployment permissions to the MetaApi token.",
+            "provider_provisioning_failed": "MetaApi could not complete hosted-account provisioning. Check the exact broker server and confirm the MetaApi token has account-management permissions. No password was saved in Tradvoryx.",
+        }
+        raise HTTPException(
+            status_code=502,
+            detail={"code": safe_code, "message": messages[safe_code]},
+        ) from None
+
+    try:
+        provider_id = str(remote.id)
+        db.table("trading_accounts").update({
+            "connection_provider": "metaapi",
+            "provider_account_id": provider_id,
+            "hosted_connection_status": "provisioning",
+            "hosted_last_error_code": None,
+            "hosted_history_cursor_at": None,
+            "hosted_initial_backfill_complete": False,
+            "hosted_first_deal_at": None,
+            "hosted_last_deal_at": None,
+            "hosted_connection_verified_at": None,
+            "hosted_last_sync_at": None,
+            "broker": current.get("broker") or "MetaApi hosted MT5",
+            "server": body.server,
+            "mt5_login": body.login,
+            "hosted_status_updated_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", account_id).execute()
+    except Exception:
+        # Avoid orphaning the provider account if our persistence step fails.
+        try:
+            await remote.remove()
+        except Exception:
+            pass
+        raise HTTPException(status_code=500, detail="The hosted account was created by the provider but Tradvoryx could not save its connection state. Contact support before retrying.") from None
+
+    return {
+        "account_id": account_id,
+        "provider": "metaapi",
+        "status": "provisioning",
+        "provider_account_id": provider_id,
+        "message": "Hosted account provisioning started. The background worker will connect, import history and update the connection status.",
+    }
 
 
 @router.get("/{account_id}/hosted-mt5/status")
