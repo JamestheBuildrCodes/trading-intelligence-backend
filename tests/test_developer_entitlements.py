@@ -29,7 +29,7 @@ class FakeDB:
 
 
 def test_developer_entitlement_unlocks_enterprise_without_paid_subscription(monkeypatch):
-    monkeypatch.setattr('app.services.entitlements.get_settings', lambda: SimpleNamespace(beta_free_all_features=False))
+    monkeypatch.setenv('BETA_FREE_ALL_FEATURES', 'false')
     result = get_user_entitlements(FakeDB({
         "plan": "free",
         "status": "inactive",
@@ -46,7 +46,7 @@ def test_developer_entitlement_unlocks_enterprise_without_paid_subscription(monk
 
 
 def test_developer_preview_obeys_selected_customer_tier(monkeypatch):
-    monkeypatch.setattr('app.services.entitlements.get_settings', lambda: SimpleNamespace(beta_free_all_features=False))
+    monkeypatch.setenv('BETA_FREE_ALL_FEATURES', 'false')
     result = get_user_entitlements(FakeDB({
         "plan": "free",
         "status": "inactive",
@@ -61,7 +61,7 @@ def test_developer_preview_obeys_selected_customer_tier(monkeypatch):
 
 
 def test_non_developer_cannot_receive_developer_entitlement_by_default(monkeypatch):
-    monkeypatch.setattr('app.services.entitlements.get_settings', lambda: SimpleNamespace(beta_free_all_features=False))
+    monkeypatch.setenv('BETA_FREE_ALL_FEATURES', 'false')
     result = get_user_entitlements(FakeDB({
         "plan": "free",
         "status": "inactive",
@@ -77,7 +77,7 @@ def test_non_developer_cannot_receive_developer_entitlement_by_default(monkeypat
 
 
 def test_free_beta_unlocks_all_features_for_free_accounts(monkeypatch):
-    monkeypatch.setattr('app.services.entitlements.get_settings', lambda: SimpleNamespace(beta_free_all_features=True))
+    monkeypatch.setenv('BETA_FREE_ALL_FEATURES', 'true')
     result = get_user_entitlements(FakeDB({
         "plan": "free",
         "status": "inactive",
