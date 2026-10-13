@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
 from supabase import Client
 
@@ -84,7 +85,7 @@ class SingleTradeRunIn(BaseModel):
     timeframe: str = "15m"
     limit: int = Field(default=500, ge=3, le=1000)
     signal_index: int = Field(default=79, ge=0)
-    direction: str = "long"
+    direction: Literal["long", "short"] = "long"
     stop_loss: float
     take_profit: float
     initial_balance: float = Field(default=10000, gt=0)
