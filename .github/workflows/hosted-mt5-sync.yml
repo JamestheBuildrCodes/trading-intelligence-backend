@@ -83,7 +83,7 @@ jobs:
               --data-urlencode "hosted_connection_status=not.eq.disconnected" \
               -H "apikey: $SUPABASE_SECRET_KEY" \
               -H "Authorization: Bearer $SUPABASE_SECRET_KEY" |
-              python -c 'import json, os, sys; rows=json.load(sys.stdin); ids=[str(r["id"]) for r in rows if r.get("id")]; f=open(os.environ["GITHUB_OUTPUT"], "a"); f.write("account_ids<<EOF\\n"+"\\n".join(ids)+"\\nEOF\\n"); f.close()'
+              python -c 'import json, os, sys; rows=json.load(sys.stdin); ids=[str(r["id"]) for r in rows if r.get("id")]; f=open(os.environ["GITHUB_OUTPUT"], "a"); f.write("account_ids<<EOF"+chr(10)+chr(10).join(ids)+chr(10)+"EOF"+chr(10); f.close()'
           fi
           echo "Account selection prepared. Account IDs and secret values are not printed."
 
