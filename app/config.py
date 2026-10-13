@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     ai_daily_budget_usd: float = 1.0
     # Optional hosted MT5 provider token. Leave unset to disable cloud connections.
     metaapi_token: str | None = None
+    # Temporary beta switch allowing hosted MT5 connections on free/trader plans.
+    hosted_mt5_beta_enabled: bool = False
     # Optional Paystack billing; checkout remains disabled without the secret and all plan codes.
     paystack_secret_key: str | None = None
     paystack_trader_monthly_plan_code: str | None = None
