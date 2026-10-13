@@ -126,3 +126,47 @@ def summarize_trades(trades: list[dict], initial_balance: float = 10000.0) -> di
             "profit_factor": gross_win / gross_loss if gross_loss else (float("inf") if gross_win else 0.0),
             "expectancy_r": sum(rs) / len(rs), "max_drawdown_pct": max_dd,
             "final_balance": equity, "equity_curve": curve}
+
+
+def run_backtest(raw_candles: list[dict], signals: list[dict], config: BacktestConfig) -> dict:
+    """Run ordered strategy signals without overlapping positions or look-ahead fills.
+
+    Each signal is a mapping with signal_index, direction, stop_loss and take_profit.
+    The signal bar must be complete; execution is the following candle's open.
+    """
+    from dataclasses import replace
+
+    candles = validate_candles(raw_candles)
+    normalized = sorted(signals, key=lambda s: int(s["signal_index"]))
+    trades: list[dict] = []
+    skipped = 0
+    last_exit_index = -1
+    equity = config.initial_balance
+    for signal in normalized:
+        signal_index = int(signal["signal_index"])
+        if signal_index < 0 or signal_index + 1 >= len(candles):
+            skipped += 1
+            continue
+        if signal_index < last_exit_index:
+            skipped += 1
+            continue
+        per_trade = replace(
+            config,
+            signal_index=signal_index,
+            direction=signal.get("direction", config.direction),
+            stop_loss=float(signal["stop_loss"]),
+            take_profit=float(signal["take_profit"]),
+            initial_balance=equity,
+        )
+        try:
+            trade = run_single_trade(raw_candles, per_trade)
+        except ValueError:
+            skipped += 1
+            continue
+        trade["trade_number"] = len(trades) + 1
+        trades.append(trade)
+        equity += trade["net_pnl"]
+        last_exit_index = int(trade["exit_index"])
+    stats = summarize_trades(trades, config.initial_balance)
+    return {"trades": trades, "statistics": stats, "skipped_signals": skipped,
+            "execution_model": "completed-bar signal, next-bar-open entry; stop-first OHLC collision"}
