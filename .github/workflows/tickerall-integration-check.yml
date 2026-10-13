@@ -1,0 +1,29 @@
+name: TickerAll integration checks
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app/config.py"
+      - "app/schemas.py"
+      - "app/routers/hosted_mt5.py"
+      - "app/workers/tickerall_sync.py"
+      - ".github/workflows/tickerall-integration-check.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile TickerAll integration modules
+        run: python -m py_compile app/config.py app/schemas.py app/routers/hosted_mt5.py app/workers/tickerall_sync.py
+      - name: Validate worker command interface
+        run: python -m app.workers.tickerall_sync --help
