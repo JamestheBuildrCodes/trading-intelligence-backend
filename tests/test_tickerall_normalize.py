@@ -36,3 +36,12 @@ def test_null_close_ticket_can_use_stable_fallback_identity():
     assert trade["mt5_position_id"].startswith("tickerall:10001:2026-10-01T11:00:00")
     assert trade["commission"] == -0.5
     assert trade["swap"] == -0.2
+
+
+def test_history_deduplication_preserves_distinct_partial_closes_without_close_ticket():
+    from app.workers.tickerall_sync import dedupe_trades
+
+    first = _row(ticket="position-1", closeTicket=None, closeTime="2026-10-01T11:00:00Z", profit=4.0)
+    second = _row(ticket="position-1", closeTicket=None, closeTime="2026-10-01T11:30:00Z", profit=6.0)
+    duplicate = dict(first)
+    assert len(dedupe_trades([first, second, duplicate])) == 2
