@@ -509,6 +509,7 @@ async def run_once(account_id: str, max_chunks: int = MAX_HISTORY_CHUNKS_PER_RUN
 
     db = get_supabase()
     run_result = db.table("hosted_mt5_worker_runs").insert({
+        "account_id": account_id,
         "started_at": datetime.now(timezone.utc).isoformat(),
         "status": "running",
     }).execute()
