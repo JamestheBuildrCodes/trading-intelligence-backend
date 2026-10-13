@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import isfinite
+from math import isfinite as _isfinite
 from typing import Literal
 
 
@@ -61,8 +62,15 @@ def run_single_trade(raw_candles: list[dict], config: BacktestConfig) -> dict:
         raise ValueError("signal_index must have a following candle for entry")
     if config.initial_balance <= 0 or not 0 < config.risk_percent <= 100:
         raise ValueError("initial_balance must be positive and risk_percent must be in (0, 100]")
+    numeric_config = (config.initial_balance, config.risk_percent, config.spread_price, config.slippage_price, config.commission_per_unit)
+    if not all(isfinite(float(value)) for value in numeric_config):
+        raise ValueError("Configuration values must be finite")
     if min(config.spread_price, config.slippage_price, config.commission_per_unit) < 0:
         raise ValueError("Costs cannot be negative")
+    if config.max_bars is not None and config.max_bars < 1:
+        raise ValueError("max_bars must be positive when specified")
+    if config.direction not in ("long", "short"):
+        raise ValueError("direction must be long or short")
     entry_bar = candles[entry_index]
     entry = entry_bar.open
     sign = 1 if config.direction == "long" else -1
@@ -123,7 +131,7 @@ def summarize_trades(trades: list[dict], initial_balance: float = 10000.0) -> di
         curve.append(equity)
     return {"trade_count": len(trades), "wins": wins, "losses": sum(x < 0 for x in pnl),
             "win_rate_pct": wins / len(pnl) * 100, "net_pnl": sum(pnl),
-            "profit_factor": gross_win / gross_loss if gross_loss else (float("inf") if gross_win else 0.0),
+            "profit_factor": gross_win / gross_loss if gross_loss else (None if gross_win else 0.0),
             "expectancy_r": sum(rs) / len(rs), "max_drawdown_pct": max_dd,
             "final_balance": equity, "equity_curve": curve}
 
