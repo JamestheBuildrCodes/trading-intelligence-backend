@@ -39,11 +39,15 @@ def test_workflow_supports_scheduled_multi_account_hosted_sync_and_manual_runs()
     text = path.read_text(encoding="utf-8")
     assert "workflow_dispatch:" in text
     assert "schedule:" in text
-    assert "METAAPI_TOKEN: ${{ secrets.METAAPI_TOKEN }}" in text
+    # The scheduled workflow has migrated to TickerAll; keep its provider
+    # configuration and actual worker invocation covered by this regression test.
+    assert "TICKERALL_API_KEY: ${{ secrets.TICKERALL_API_KEY }}" in text
     assert "SUPABASE_URL: ${{ secrets.SUPABASE_URL }}" in text
     assert "SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}" in text
     assert "CONNECTOR_TOKEN_PEPPER: ${{ secrets.CONNECTOR_TOKEN_PEPPER }}" in text
-    assert "python -m app.workers.hosted_mt5_sync" in text
+    assert "python -m app.workers.tickerall_sync" in text
+    assert 'connection_provider=eq.tickerall' in text
+    assert "METAAPI_TOKEN: ${{ secrets.METAAPI_TOKEN }}" not in text
     assert "confirm_live_headway_account:" not in text
     assert "CONFIRM_LIVE_HEADWAY_ACCOUNT" not in text
 
