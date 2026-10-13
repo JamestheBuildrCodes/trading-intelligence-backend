@@ -61,8 +61,15 @@ def run_single_trade(raw_candles: list[dict], config: BacktestConfig) -> dict:
         raise ValueError("signal_index must have a following candle for entry")
     if config.initial_balance <= 0 or not 0 < config.risk_percent <= 100:
         raise ValueError("initial_balance must be positive and risk_percent must be in (0, 100]")
+    numeric_config = (config.initial_balance, config.risk_percent, config.spread_price, config.slippage_price, config.commission_per_unit)
+    if not all(isfinite(float(value)) for value in numeric_config):
+        raise ValueError("Configuration values must be finite")
     if min(config.spread_price, config.slippage_price, config.commission_per_unit) < 0:
         raise ValueError("Costs cannot be negative")
+    if config.max_bars is not None and config.max_bars < 1:
+        raise ValueError("max_bars must be positive when specified")
+    if config.direction not in ("long", "short"):
+        raise ValueError("direction must be long or short")
     entry_bar = candles[entry_index]
     entry = entry_bar.open
     sign = 1 if config.direction == "long" else -1
@@ -73,19 +80,27 @@ def run_single_trade(raw_candles: list[dict], config: BacktestConfig) -> dict:
     units = (config.initial_balance * config.risk_percent / 100) / risk_distance
     entry_fill = entry + sign * (config.spread_price / 2 + config.slippage_price)
     exit_price, exit_index, exit_reason = candles[-1].close, len(candles) - 1, "end_of_data"
-    end = min(len(candles), entry_index + config.max_bars) if config.max_bars else len(candles)
+    end = min(len(candles), entry_index + config.max_bars) if config.max_bars is not None else len(candles)
     for index in range(entry_index, end):
         bar = candles[index]
-        stop_hit = bar.low <= stop if config.direction == "long" else bar.high >= stop
-        target_hit = bar.high >= target if config.direction == "long" else bar.low <= target
+        # Stops gap through at the next available open; do not assume a fill at the stale stop price.
+        stop_gap = bar.open <= stop if config.direction == "long" else bar.open >= stop
+        target_gap = bar.open >= target if config.direction == "long" else bar.open <= target
+        stop_hit = stop_gap or (bar.low <= stop if config.direction == "long" else bar.high >= stop)
+        target_hit = target_gap or (bar.high >= target if config.direction == "long" else bar.low <= target)
         # OHLC cannot resolve intrabar order: if both are hit, count the stop first.
         if stop_hit:
-            exit_price, exit_index, exit_reason = stop, index, "stop_loss"
+            exit_price = bar.open if stop_gap else stop
+            exit_index, exit_reason = index, "stop_loss"
             break
         if target_hit:
-            exit_price, exit_index, exit_reason = target, index, "take_profit"
+            exit_price = bar.open if target_gap else target
+            exit_index, exit_reason = index, "take_profit"
             break
         exit_price, exit_index = bar.close, index
+    else:
+        if end < len(candles):
+            exit_reason = "max_bars"
     exit_fill = exit_price - sign * (config.spread_price / 2 + config.slippage_price)
     gross = (exit_fill - entry_fill) * sign * units
     commission = config.commission_per_unit * units * 2
@@ -123,7 +138,7 @@ def summarize_trades(trades: list[dict], initial_balance: float = 10000.0) -> di
         curve.append(equity)
     return {"trade_count": len(trades), "wins": wins, "losses": sum(x < 0 for x in pnl),
             "win_rate_pct": wins / len(pnl) * 100, "net_pnl": sum(pnl),
-            "profit_factor": gross_win / gross_loss if gross_loss else (float("inf") if gross_win else 0.0),
+            "profit_factor": gross_win / gross_loss if gross_loss else (None if gross_win else 0.0),
             "expectancy_r": sum(rs) / len(rs), "max_drawdown_pct": max_dd,
             "final_balance": equity, "equity_curve": curve}
 

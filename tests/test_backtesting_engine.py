@@ -66,3 +66,38 @@ def test_strategy_neutral_runner_sizes_from_updated_equity_and_skips_overlap():
     assert result["skipped_signals"] == 1
     assert result["trades"][0]["entry_index"] == 1
     assert result["trades"][1]["entry_index"] == 4
+
+
+
+def test_perfect_backtest_has_json_safe_undefined_profit_factor():
+    stats = summarize_trades([{"net_pnl": 10.0, "r_multiple": 1.0}], 1000.0)
+    assert stats["profit_factor"] is None
+    assert stats["final_balance"] == 1010.0
+
+
+def test_rejects_non_finite_costs():
+    bars = candles([(100, 101, 99, 100), (100, 102, 99, 101), (101, 106, 100, 104)])
+    with pytest.raises(ValueError):
+        run_single_trade(bars, BacktestConfig(signal_index=0, stop_loss=98, take_profit=105,
+                                              slippage_price=float("nan")))
+
+
+def test_rejects_zero_max_bars():
+    bars = candles([(100, 101, 99, 100), (100, 102, 99, 101), (101, 106, 100, 104)])
+    with pytest.raises(ValueError):
+        run_single_trade(bars, BacktestConfig(signal_index=0, stop_loss=98, take_profit=105,
+                                              max_bars=0))
+
+
+def test_stop_gap_fills_at_available_open_not_stale_stop():
+    bars = candles([(100, 101, 99, 100), (100, 101, 99, 100), (95, 98, 94, 96)])
+    trade = run_single_trade(bars, BacktestConfig(signal_index=0, stop_loss=98, take_profit=105))
+    assert trade["exit_reason"] == "stop_loss"
+    assert trade["exit_price"] == 95
+
+
+def test_max_bars_has_explicit_exit_reason():
+    bars = candles([(100, 101, 99, 100), (100, 101, 99, 100), (100, 101, 99, 100)])
+    trade = run_single_trade(bars, BacktestConfig(signal_index=0, stop_loss=98, take_profit=105, max_bars=1))
+    assert trade["exit_reason"] == "max_bars"
+    assert trade["exit_index"] == 1

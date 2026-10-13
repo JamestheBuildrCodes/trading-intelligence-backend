@@ -77,13 +77,14 @@ async def historical_candles(
 
 
 from pydantic import BaseModel, Field
-from app.services.backtesting import BacktestConfig, run_single_trade
+from app.services.backtesting import BacktestConfig, run_backtest, run_single_trade
 
 
 class SingleTradeRunIn(BaseModel):
     symbol: str = Field(min_length=1, max_length=32, pattern=r"^[A-Za-z0-9._-]+$")
     timeframe: str = "15m"
     limit: int = Field(default=500, ge=3, le=1000)
+    start_time: datetime | None = None
     signal_index: int = Field(default=79, ge=0)
     direction: Literal["long", "short"] = "long"
     stop_loss: float
@@ -126,7 +127,7 @@ async def simulate_historical_trade(
         await connection.wait_synchronized()
         raw = await connection.get_historical_candles(
             symbol=body.symbol.upper(), timeframe=body.timeframe,
-            start_time=datetime.now(timezone.utc), limit=body.limit)
+            start_time=body.start_time or datetime.now(timezone.utc), limit=body.limit)
         payload = []
         for item in raw or []:
             payload.append({"time": int(parse_provider_time(item.get("time") or item.get("brokerTime")).timestamp()),
@@ -154,3 +155,64 @@ async def simulate_historical_trade(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception:
         raise HTTPException(status_code=502, detail="Backtest failed to load or validate broker candles. Check account synchronization and symbol availability.") from None
+
+
+
+class BacktestSignalIn(BaseModel):
+    signal_index: int = Field(ge=0)
+    direction: Literal["long", "short"] | None = None
+    stop_loss: float
+    take_profit: float
+
+
+class BacktestRunIn(BaseModel):
+    symbol: str = Field(min_length=1, max_length=32, pattern=r"^[A-Za-z0-9._-]+$")
+    timeframe: str = "15m"
+    limit: int = Field(default=1000, ge=3, le=1000)
+    start_time: datetime | None = None
+    initial_balance: float = Field(default=10000, gt=0)
+    risk_percent: float = Field(default=1, gt=0, le=100)
+    spread_price: float = Field(default=0, ge=0)
+    slippage_price: float = Field(default=0, ge=0)
+    commission_per_unit: float = Field(default=0, ge=0)
+    default_direction: Literal["long", "short"] = "long"
+    signals: list[BacktestSignalIn] = Field(min_length=1, max_length=500)
+
+
+@router.post("/accounts/{account_id}/run")
+async def run_historical_backtest(
+    account_id: str,
+    body: BacktestRunIn,
+    user: CurrentUser = Depends(get_current_user),
+    db: Client = Depends(get_supabase),
+):
+    """Run a strategy-neutral, multi-signal simulation against owned broker history."""
+    if body.timeframe not in _ALLOWED_TIMEFRAMES:
+        raise HTTPException(status_code=422, detail="Unsupported timeframe")
+    try:
+        history = await historical_candles(
+            account_id=account_id, symbol=body.symbol, timeframe=body.timeframe,
+            limit=body.limit, start_time=body.start_time, user=user, db=db)
+        signals = [signal.model_dump(exclude_none=True) for signal in body.signals]
+        config = BacktestConfig(
+            direction=body.default_direction, initial_balance=body.initial_balance,
+            risk_percent=body.risk_percent, spread_price=body.spread_price,
+            slippage_price=body.slippage_price, commission_per_unit=body.commission_per_unit)
+        result = run_backtest(history["candles"], signals, config)
+        return {
+            "account_id": account_id, "symbol": body.symbol.upper(), "timeframe": body.timeframe,
+            "source": history["source"], "candles_used": history["count"],
+            **result,
+            "assumptions": {
+                "entry": "next candle open after completed signal candle",
+                "same_candle_collision": "stop loss first",
+                "overlapping_positions": "not allowed",
+                "spread_price": body.spread_price, "slippage_price": body.slippage_price,
+                "commission_per_unit_per_side": body.commission_per_unit,
+                "initial_balance": body.initial_balance, "risk_percent": body.risk_percent,
+            },
+        }
+    except HTTPException:
+        raise
+    except (ValueError, KeyError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid backtest request or data: {exc}") from exc
