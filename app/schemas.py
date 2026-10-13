@@ -314,7 +314,7 @@ class HostedMt5ConnectIn(BaseModel):
 
 class HostedMt5ConnectOut(BaseModel):
     account_id: str
-    provider: Literal["metaapi"]
+    provider: Literal["metaapi", "tickerall"]
     status: Literal["provisioning", "connecting", "connected", "error", "disconnected"]
     provider_account_id: str | None = None
     message: str
