@@ -47,3 +47,22 @@ def test_drawdown_and_statistics():
     assert stats["net_pnl"] == 75
     assert stats["max_drawdown_pct"] == pytest.approx(50 / 1100 * 100)
     assert stats["final_balance"] == 1075
+
+
+def test_strategy_neutral_runner_sizes_from_updated_equity_and_skips_overlap():
+    from app.services.backtesting import run_backtest
+    bars = candles([
+        (100, 101, 99, 100), (100, 106, 99, 104),
+        (104, 105, 103, 104), (104, 105, 101, 102),
+        (102, 103, 101, 102),
+    ])
+    signals = [
+        {"signal_index": 0, "direction": "long", "stop_loss": 98, "take_profit": 105},
+        {"signal_index": 1, "direction": "long", "stop_loss": 102, "take_profit": 110},
+        {"signal_index": 3, "direction": "long", "stop_loss": 100, "take_profit": 110},
+    ]
+    result = run_backtest(bars, signals, BacktestConfig(initial_balance=1000, risk_percent=1))
+    assert result["statistics"]["trade_count"] == 2
+    assert result["skipped_signals"] == 1
+    assert result["trades"][0]["entry_index"] == 1
+    assert result["trades"][1]["entry_index"] == 4
