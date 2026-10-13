@@ -58,7 +58,7 @@ def test_strategy_neutral_runner_sizes_from_updated_equity_and_skips_overlap():
     ])
     signals = [
         {"signal_index": 0, "direction": "long", "stop_loss": 98, "take_profit": 105},
-        {"signal_index": 1, "direction": "long", "stop_loss": 102, "take_profit": 110},
+        {"signal_index": 0, "direction": "long", "stop_loss": 99, "take_profit": 110},
         {"signal_index": 3, "direction": "long", "stop_loss": 100, "take_profit": 110},
     ]
     result = run_backtest(bars, signals, BacktestConfig(initial_balance=1000, risk_percent=1))
