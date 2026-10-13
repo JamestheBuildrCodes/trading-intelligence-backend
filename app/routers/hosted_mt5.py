@@ -204,14 +204,18 @@ async def connect_hosted_mt5(
     except Exception:
         # Best-effort cleanup if Tradvoryx cannot persist the connection reference.
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                await client.delete(
-                    f"https://api.tickerall.com/v1/sessions/{provider_id}",
-                    headers={"Authorization": f"Bearer {token}"},
-                )
+            if provider == "tickerall":
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    await client.delete(
+                        f"https://api.tickerall.com/v1/sessions/{provider_id}",
+                        headers={"Authorization": f"Bearer {token}"},
+                    )
+            elif provider == "metaapi" and remote_account is not None:
+                await remote_account.undeploy()
+                await remote_account.remove()
         except Exception:
             pass
-        raise HTTPException(status_code=500, detail="TickerAll connected the broker, but Tradvoryx could not save the connection state. Contact support before retrying.") from None
+        raise HTTPException(status_code=500, detail=f"{provider} connected the broker, but Tradvoryx could not save the connection state. Contact support before retrying.") from None
 
     return {
         "account_id": account_id,
