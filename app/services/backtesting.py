@@ -80,19 +80,27 @@ def run_single_trade(raw_candles: list[dict], config: BacktestConfig) -> dict:
     units = (config.initial_balance * config.risk_percent / 100) / risk_distance
     entry_fill = entry + sign * (config.spread_price / 2 + config.slippage_price)
     exit_price, exit_index, exit_reason = candles[-1].close, len(candles) - 1, "end_of_data"
-    end = min(len(candles), entry_index + config.max_bars) if config.max_bars else len(candles)
+    end = min(len(candles), entry_index + config.max_bars) if config.max_bars is not None else len(candles)
     for index in range(entry_index, end):
         bar = candles[index]
-        stop_hit = bar.low <= stop if config.direction == "long" else bar.high >= stop
-        target_hit = bar.high >= target if config.direction == "long" else bar.low <= target
+        # Stops gap through at the next available open; do not assume a fill at the stale stop price.
+        stop_gap = bar.open <= stop if config.direction == "long" else bar.open >= stop
+        target_gap = bar.open >= target if config.direction == "long" else bar.open <= target
+        stop_hit = stop_gap or (bar.low <= stop if config.direction == "long" else bar.high >= stop)
+        target_hit = target_gap or (bar.high >= target if config.direction == "long" else bar.low <= target)
         # OHLC cannot resolve intrabar order: if both are hit, count the stop first.
         if stop_hit:
-            exit_price, exit_index, exit_reason = stop, index, "stop_loss"
+            exit_price = bar.open if stop_gap else stop
+            exit_index, exit_reason = index, "stop_loss"
             break
         if target_hit:
-            exit_price, exit_index, exit_reason = target, index, "take_profit"
+            exit_price = bar.open if target_gap else target
+            exit_index, exit_reason = index, "take_profit"
             break
         exit_price, exit_index = bar.close, index
+    else:
+        if end < len(candles):
+            exit_reason = "max_bars"
     exit_fill = exit_price - sign * (config.spread_price / 2 + config.slippage_price)
     gross = (exit_fill - entry_fill) * sign * units
     commission = config.commission_per_unit * units * 2
