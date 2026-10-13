@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import HTTPException
+
+from app.config import get_settings
 from supabase import Client
 
 PLAN_ENTITLEMENTS: dict[str, dict[str, Any]] = {
@@ -104,7 +106,8 @@ def require_account_feature(db: Client, account_id: str, feature: str) -> dict[s
     if not result.data:
         raise HTTPException(status_code=404, detail="Account not found.")
     entitlement = get_user_entitlements(db, str(result.data[0]["user_id"]))
-    allowed = entitlement["entitlements"].get(feature)
+    beta_hosted_mt5 = feature == "hosted_mt5" and get_settings().hosted_mt5_beta_enabled
+    allowed = True if beta_hosted_mt5 else entitlement["entitlements"].get(feature)
     if allowed is not True:
         required_label = {
             "advanced_cost_analysis": "Trader or Pro",
