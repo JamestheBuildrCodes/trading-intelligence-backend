@@ -1,7 +1,7 @@
-"""Deterministic, candle-based backtesting primitives. No broker orders are sent."""
+"""Deterministic candle backtesting primitives. No broker orders are sent."""
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from math import isfinite
 from typing import Literal
 
@@ -21,12 +21,9 @@ def validate_candles(raw: list[dict]) -> list[Candle]:
     previous = -1
     for index, row in enumerate(raw):
         try:
-            candle = Candle(
-                time=int(row["time"]),
-                open=float(row["open"]), high=float(row["high"]),
-                low=float(row["low"]), close=float(row["close"]),
-                volume=float(row.get("volume", row.get("tickVolume", 0)) or 0),
-            )
+            candle = Candle(int(row["time"]), float(row["open"]), float(row["high"]),
+                            float(row["low"]), float(row["close"]),
+                            float(row.get("volume", row.get("tickVolume", 0)) or 0))
         except (KeyError, TypeError, ValueError, OverflowError) as exc:
             raise ValueError(f"Invalid candle at index {index}") from exc
         values = (candle.open, candle.high, candle.low, candle.close, candle.volume)
@@ -46,7 +43,7 @@ def validate_candles(raw: list[dict]) -> list[Candle]:
 @dataclass(frozen=True)
 class BacktestConfig:
     direction: Literal["long", "short"] = "long"
-    entry_index: int = 1
+    signal_index: int = 0
     stop_loss: float = 0.0
     take_profit: float = 0.0
     initial_balance: float = 10000.0
@@ -59,32 +56,29 @@ class BacktestConfig:
 
 def run_single_trade(raw_candles: list[dict], config: BacktestConfig) -> dict:
     candles = validate_candles(raw_candles)
-    if config.entry_index < 0 or config.entry_index + 1 >= len(candles):
-        raise ValueError("entry_index must leave at least one later candle for execution")
+    entry_index = config.signal_index + 1  # Signal uses a completed bar; fill is next bar's open.
+    if config.signal_index < 0 or entry_index >= len(candles):
+        raise ValueError("signal_index must have a following candle for entry")
     if config.initial_balance <= 0 or not 0 < config.risk_percent <= 100:
         raise ValueError("initial_balance must be positive and risk_percent must be in (0, 100]")
     if min(config.spread_price, config.slippage_price, config.commission_per_unit) < 0:
         raise ValueError("Costs cannot be negative")
-    entry_bar = candles[config.entry_index]
+    entry_bar = candles[entry_index]
     entry = entry_bar.open
     sign = 1 if config.direction == "long" else -1
     stop, target = config.stop_loss, config.take_profit
     if (config.direction == "long" and not stop < entry < target) or (config.direction == "short" and not target < entry < stop):
         raise ValueError("Stop and target must bracket the next-candle open in the trade direction")
     risk_distance = abs(entry - stop)
-    risk_cash = config.initial_balance * config.risk_percent / 100
-    units = risk_cash / risk_distance
-    # Costs are explicit price units; spread is charged as a full round-trip price cost.
+    units = (config.initial_balance * config.risk_percent / 100) / risk_distance
     entry_fill = entry + sign * (config.spread_price / 2 + config.slippage_price)
-    exit_price = candles[-1].close
-    exit_index = len(candles) - 1
-    exit_reason = "end_of_data"
-    end = min(len(candles), config.entry_index + 1 + config.max_bars) if config.max_bars else len(candles)
-    for index in range(config.entry_index + 1, end):
+    exit_price, exit_index, exit_reason = candles[-1].close, len(candles) - 1, "end_of_data"
+    end = min(len(candles), entry_index + config.max_bars) if config.max_bars else len(candles)
+    for index in range(entry_index, end):
         bar = candles[index]
         stop_hit = bar.low <= stop if config.direction == "long" else bar.high >= stop
         target_hit = bar.high >= target if config.direction == "long" else bar.low <= target
-        # OHLC cannot establish intrabar order; conservative deterministic rule is stop first.
+        # OHLC cannot resolve intrabar order: if both are hit, count the stop first.
         if stop_hit:
             exit_price, exit_index, exit_reason = stop, index, "stop_loss"
             break
@@ -96,15 +90,13 @@ def run_single_trade(raw_candles: list[dict], config: BacktestConfig) -> dict:
     gross = (exit_fill - entry_fill) * sign * units
     commission = config.commission_per_unit * units * 2
     net = gross - commission
-    risk_basis = risk_distance * units
-    r_multiple = net / risk_basis if risk_basis else 0.0
     return {
-        "direction": config.direction, "entry_index": config.entry_index,
-        "entry_time": entry_bar.time, "entry_price": entry, "entry_fill": entry_fill,
-        "exit_index": exit_index, "exit_time": candles[exit_index].time,
+        "direction": config.direction, "signal_index": config.signal_index,
+        "entry_index": entry_index, "entry_time": entry_bar.time, "entry_price": entry,
+        "entry_fill": entry_fill, "exit_index": exit_index, "exit_time": candles[exit_index].time,
         "exit_price": exit_price, "exit_fill": exit_fill, "exit_reason": exit_reason,
         "units": units, "gross_pnl": gross, "commission": commission,
-        "net_pnl": net, "r_multiple": r_multiple,
+        "net_pnl": net, "r_multiple": net / (risk_distance * units),
     }
 
 
@@ -120,11 +112,8 @@ def summarize_trades(trades: list[dict], initial_balance: float = 10000.0) -> di
     if not all(isfinite(x) for x in pnl + rs):
         raise ValueError("Trade results must be finite")
     wins = sum(x > 0 for x in pnl)
-    gross_win = sum(x for x in pnl if x > 0)
-    gross_loss = -sum(x for x in pnl if x < 0)
-    equity = initial_balance
-    peak = equity
-    max_dd = 0.0
+    gross_win, gross_loss = sum(x for x in pnl if x > 0), -sum(x for x in pnl if x < 0)
+    equity, peak, max_dd = initial_balance, initial_balance, 0.0
     curve = [equity]
     for value in pnl:
         equity += value
