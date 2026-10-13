@@ -87,3 +87,17 @@ def test_rejects_zero_max_bars():
     with pytest.raises(ValueError):
         run_single_trade(bars, BacktestConfig(signal_index=0, stop_loss=98, take_profit=105,
                                               max_bars=0))
+
+
+def test_stop_gap_fills_at_available_open_not_stale_stop():
+    bars = candles([(100, 101, 99, 100), (100, 101, 99, 100), (95, 98, 94, 96)])
+    trade = run_single_trade(bars, BacktestConfig(signal_index=0, stop_loss=98, take_profit=105))
+    assert trade["exit_reason"] == "stop_loss"
+    assert trade["exit_price"] == 95
+
+
+def test_max_bars_has_explicit_exit_reason():
+    bars = candles([(100, 101, 99, 100), (100, 101, 99, 100), (100, 101, 99, 100)])
+    trade = run_single_trade(bars, BacktestConfig(signal_index=0, stop_loss=98, take_profit=105, max_bars=1))
+    assert trade["exit_reason"] == "max_bars"
+    assert trade["exit_index"] == 1
