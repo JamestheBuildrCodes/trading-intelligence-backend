@@ -21,7 +21,7 @@ from app.services.aggregation import classify_session
 
 BASE_URL = "https://api.tickerall.com"
 CHUNK_DAYS = 180
-INITIAL_LOOKBACK_DAYS = max(365, int(os.getenv("TICKERALL_INITIAL_LOOKBACK_DAYS", "10000")))
+INITIAL_LOOKBACK_DAYS = max(365, int(os.getenv("TICKERALL_INITIAL_LOOKBACK_DAYS", "3650")))
 log = logging.getLogger("tradvoryx.tickerall_sync")
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
 
@@ -278,10 +278,10 @@ async def sync_one(db: Client, account_id: str, max_chunks: int) -> None:
             if str(remote.get("status") or "").lower() not in {"online", "connected"}:
                 raise RuntimeError("tickerall_account_not_hot")
             info = remote.get("account") if isinstance(remote.get("account"), dict) else {}
-            remote_login = str(remote.get("accountNumber") or "").replace("*", "").strip()
+            remote_login = str(remote.get("accountNumber") or "").strip()
             saved_login = str(saved.get("mt5_login") or "").strip()
             # TickerAll masks account numbers; compare only when it returns an unmasked value.
-            if remote_login and not remote_login.startswith("*") and saved_login and remote_login != saved_login:
+            if remote_login and "*" not in remote_login and saved_login and remote_login != saved_login:
                 raise RuntimeError("account_identity_mismatch")
             currency = str(info.get("currency") or "").upper()
             if saved.get("currency") and currency and str(saved["currency"]).upper() != currency:
