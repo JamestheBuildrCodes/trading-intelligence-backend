@@ -1,9 +1,8 @@
 name: Hosted MT5 cloud sync
 
 on:
-  schedule:
-    # Keep hosted connections fresh for beta testers without requiring their PCs to stay online.
-    - cron: "*/15 * * * *"
+  # Scheduled runs are paused until the MetaApi token/workspace and saved provider IDs are reconciled.
+  # Use workflow_dispatch for a controlled test after configuration is verified.
   workflow_dispatch:
     inputs:
       account_id:
