@@ -90,7 +90,8 @@ def get_user_entitlements(db: Client, user_id: str) -> dict[str, Any]:
         "paid": paid and not developer_access,
         "developer_access": developer_access,
         "developer_preview_plan": plan if developer_access else None,
-        "entitlements": dict(PLAN_ENTITLEMENTS[plan]),
+        "entitlements": dict(PLAN_ENTITLEMENTS["enterprise"] if get_settings().beta_free_all_features else PLAN_ENTITLEMENTS[plan]),
+        "beta_access": bool(get_settings().beta_free_all_features),
     }
 
 
