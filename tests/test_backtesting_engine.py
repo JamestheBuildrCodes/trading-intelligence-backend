@@ -15,25 +15,25 @@ def test_rejects_bad_ohlc_and_non_monotonic_time():
                           {"time": 60, "open": 1, "high": 2, "low": 0, "close": 1}])
 
 
-def test_entry_is_next_candle_open_and_target_hit():
+def test_entry_occurs_at_open_after_signal_candle_and_target_hit():
     bars = candles([(100, 101, 99, 100), (100, 102, 99, 101), (101, 106, 100, 104)])
-    trade = run_single_trade(bars, BacktestConfig(entry_index=0, stop_loss=98, take_profit=105))
+    trade = run_single_trade(bars, BacktestConfig(signal_index=0, stop_loss=98, take_profit=105))
+    assert trade["entry_index"] == 1
     assert trade["entry_price"] == 100
-    assert trade["entry_index"] == 0
     assert trade["exit_reason"] == "take_profit"
     assert trade["exit_price"] == 105
 
 
 def test_stop_wins_if_stop_and_target_touched_same_candle():
-    bars = candles([(100, 101, 99, 100), (100, 101, 99, 100), (100, 106, 97, 102)])
-    trade = run_single_trade(bars, BacktestConfig(entry_index=0, stop_loss=98, take_profit=105))
+    bars = candles([(100, 101, 99, 100), (100, 106, 97, 102), (102, 103, 101, 102)])
+    trade = run_single_trade(bars, BacktestConfig(signal_index=0, stop_loss=98, take_profit=105))
     assert trade["exit_reason"] == "stop_loss"
     assert trade["exit_price"] == 98
 
 
 def test_commission_and_slippage_are_charged():
     bars = candles([(100, 101, 99, 100), (100, 103, 99, 102), (102, 103, 101, 102)])
-    trade = run_single_trade(bars, BacktestConfig(entry_index=0, stop_loss=98, take_profit=105,
+    trade = run_single_trade(bars, BacktestConfig(signal_index=0, stop_loss=98, take_profit=105,
                                                   commission_per_unit=0.1, slippage_price=0.2))
     assert trade["commission"] > 0
     assert trade["net_pnl"] < trade["gross_pnl"]
