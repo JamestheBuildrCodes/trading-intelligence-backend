@@ -220,9 +220,30 @@ async def connect_hosted_mt5(
                 raise last_error
     if not provider:
         if last_error is not None:
+            failures = []
+            # Only expose safe, authored provider messages; never provider response bodies,
+            # request headers, login details, or credentials.
+            if last_error.detail:
+                detail = last_error.detail
+                if isinstance(detail, dict):
+                    safe_message = detail.get("message")
+                    if isinstance(safe_message, str) and safe_message.strip():
+                        failures.append(safe_message.strip())
+                elif isinstance(detail, str):
+                    failures.append(detail.strip())
+            failure_summary = " ".join(failures)
+            fallback_message = (
+                "No configured provider could connect this account. For a live account, "
+                "TickerAll requires a Trader or Pro plan for API access; MetaApi also "
+                "needs available deployment capacity/permissions. Confirm the exact broker "
+                "server and investor password, then retry with an explicitly selected provider."
+            )
             raise HTTPException(
                 status_code=502,
-                detail={"code": "all_hosted_providers_failed", "message": "All configured hosted providers failed to connect this account. Try choosing a provider explicitly, verify provider plan/capacity and the exact broker server, then retry."},
+                detail={
+                    "code": "all_hosted_providers_failed",
+                    "message": (failure_summary + " " + fallback_message).strip() if failure_summary else fallback_message,
+                },
             )
         raise HTTPException(status_code=502, detail="No hosted provider could connect this MT5 account.")
 
