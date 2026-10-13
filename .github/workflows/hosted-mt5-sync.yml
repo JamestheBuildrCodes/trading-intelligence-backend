@@ -1,44 +1,37 @@
-name: Hosted MT5 historical import (manual)
+name: Hosted MT5 cloud sync
 
 on:
+  schedule:
+    # Keep hosted connections fresh for beta testers without requiring their PCs to stay online.
+    - cron: "*/15 * * * *"
   workflow_dispatch:
     inputs:
       account_id:
-        description: "Exact trading_accounts UUID for the connected Headway-Real live account"
-        required: true
+        description: "Optional exact trading_accounts UUID; leave blank to sync all connected MetaApi accounts"
+        required: false
         type: string
-      confirm_live_headway_account:
-        description: "Confirm this is the Headway REAL/LIVE account, not a demo account"
-        required: true
-        type: boolean
-        default: false
       max_history_chunks:
-        description: "Bounded 180-day history windows to process in this run"
+        description: "Maximum 180-day history windows per account in this run"
         required: true
         type: choice
         options:
           - "1"
+          - "2"
           - "5"
           - "10"
           - "20"
-          - "50"
         default: "10"
-
-# Scheduling intentionally disabled for the first import. After verifying the
-# initial history end-to-end, optional recurring sync can be enabled by adding:
-#   schedule:
-#     - cron: "17 */6 * * *"
 
 permissions:
   contents: read
 
 concurrency:
-  group: hosted-mt5-history-import
+  group: hosted-mt5-cloud-sync
   cancel-in-progress: false
 
 jobs:
-  hosted-history-import:
-    name: Sync selected Headway live MT5 history
+  hosted-sync:
+    name: Sync hosted MT5 accounts
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -47,8 +40,7 @@ jobs:
       SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
       CONNECTOR_TOKEN_PEPPER: ${{ secrets.CONNECTOR_TOKEN_PEPPER }}
       TARGET_ACCOUNT_ID: ${{ inputs.account_id }}
-      CONFIRM_LIVE_HEADWAY_ACCOUNT: ${{ inputs.confirm_live_headway_account }}
-      MAX_HISTORY_CHUNKS: ${{ inputs.max_history_chunks }}
+      MAX_HISTORY_CHUNKS: ${{ inputs.max_history_chunks || '2' }}
       PYTHONUNBUFFERED: "1"
       PYTHONPATH: .
     steps:
@@ -62,22 +54,11 @@ jobs:
           cache: pip
           cache-dependency-path: requirements.txt
 
-      - name: Validate manual target and required secrets
+      - name: Validate secrets and discover connected accounts
+        id: targets
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "$CONFIRM_LIVE_HEADWAY_ACCOUNT" != "true" ]]; then
-            echo "::error::Confirm the selected account is Headway REAL/LIVE before importing."
-            exit 1
-          fi
-          if [[ ! "$TARGET_ACCOUNT_ID" =~ ^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$ ]]; then
-            echo "::error::account_id must be a valid Supabase UUID."
-            exit 1
-          fi
-          if [[ ! "$MAX_HISTORY_CHUNKS" =~ ^(1|5|10|20|50)$ ]]; then
-            echo "::error::max_history_chunks must be one of 1, 5, 10, 20, or 50."
-            exit 1
-          fi
           for name in METAAPI_TOKEN SUPABASE_URL SUPABASE_SECRET_KEY CONNECTOR_TOKEN_PEPPER; do
             if [[ -z "${!name:-}" ]]; then
               echo "::error::Required GitHub Actions secret is missing: $name"
@@ -88,7 +69,23 @@ jobs:
             echo "::error::CONNECTOR_TOKEN_PEPPER must meet the backend's minimum length of 32 characters."
             exit 1
           fi
-          echo "Target input and required secret names validated. Secret values are not printed."
+          if [[ -n "$TARGET_ACCOUNT_ID" ]]; then
+            if [[ ! "$TARGET_ACCOUNT_ID" =~ ^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$ ]]; then
+              echo "::error::account_id must be a valid Supabase UUID."
+              exit 1
+            fi
+            printf 'account_ids=%s\n' "$TARGET_ACCOUNT_ID" >> "$GITHUB_OUTPUT"
+          else
+            curl --fail --silent --show-error --get "$SUPABASE_URL/rest/v1/trading_accounts" \
+              --data-urlencode "select=id" \
+              --data-urlencode "connection_provider=eq.metaapi" \
+              --data-urlencode "provider_account_id=not.is.null" \
+              --data-urlencode "hosted_connection_status=not.eq.disconnected" \
+              -H "apikey: $SUPABASE_SECRET_KEY" \
+              -H "Authorization: Bearer $SUPABASE_SECRET_KEY" |
+              python -c 'import json, os, sys; rows=json.load(sys.stdin); ids=[str(r["id"]) for r in rows if r.get("id")]; f=open(os.environ["GITHUB_OUTPUT"], "a"); f.write("account_ids<<EOF\\n"+"\\n".join(ids)+"\\nEOF\\n"); f.close()'
+          fi
+          echo "Account selection prepared. Account IDs and secret values are not printed."
 
       - name: Install backend dependencies
         run: |
@@ -98,27 +95,31 @@ jobs:
       - name: Run backend tests
         run: python -m pytest -q
 
-      - name: Verify worker command and CLI
+      - name: Verify worker CLI
         run: python -m app.workers.hosted_mt5_sync --help
 
-      - name: Import a bounded history batch
-        run: |
-          set -euo pipefail
-          python -m app.workers.hosted_mt5_sync \
-            --account-id "$TARGET_ACCOUNT_ID" \
-            --max-history-chunks "$MAX_HISTORY_CHUNKS"
-
-      - name: Write run summary
-        if: success()
+      - name: Sync all selected accounts
         shell: bash
+        env:
+          ACCOUNT_IDS: ${{ steps.targets.outputs.account_ids }}
         run: |
-          {
-            echo "## Hosted MT5 history run"
-            echo
-            echo "- Target account reference: ...${TARGET_ACCOUNT_ID: -8}"
-            echo "- Bounded history windows requested: $MAX_HISTORY_CHUNKS"
-            echo "- Worker completed without a fatal error."
-            echo "- Check worker logs for provider rows, normalized deals, duplicate estimates, skipped rows, saved cursor, earliest/latest observed deal timestamps, and whether the initial lookback is complete."
-            echo "- A successful bounded run may still require another manual run. Broker/provider retention defines the available history; lifetime completeness is not assumed."
-            echo "- Balance/equity snapshots represent sync-time observations, not reconstructed historical equity."
-          } >> "$GITHUB_STEP_SUMMARY"
+          set -uo pipefail
+          if [[ -z "${ACCOUNT_IDS//[$'\\r\\n ']/}" ]]; then
+            echo "No active MetaApi-hosted accounts are registered yet; nothing to sync."
+            exit 0
+          fi
+          failed=0
+          seen=0
+          while IFS= read -r account_id; do
+            [[ -z "$account_id" ]] && continue
+            seen=$((seen + 1))
+            echo "Starting hosted sync for account reference ...${account_id: -8}"
+            if python -m app.workers.hosted_mt5_sync --account-id "$account_id" --max-history-chunks "$MAX_HISTORY_CHUNKS"; then
+              echo "Hosted sync completed for account reference ...${account_id: -8}"
+            else
+              echo "::warning::Hosted sync failed for account reference ...${account_id: -8}; continuing with other accounts."
+              failed=$((failed + 1))
+            fi
+          done <<< "$ACCOUNT_IDS"
+          echo "Processed $seen hosted account(s); failures: $failed."
+          if (( failed > 0 )); then exit 1; fi
