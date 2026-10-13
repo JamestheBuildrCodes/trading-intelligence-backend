@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import isfinite
-from math import isfinite as _isfinite
 from typing import Literal
 
 
