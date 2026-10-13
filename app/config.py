@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     ai_daily_budget_usd: float = 1.0
     # Optional hosted MT5 provider token. Leave unset to disable cloud connections.
     metaapi_token: str | None = None
+    # Server-only TickerAll key for hosted MT5 sessions; never expose to the frontend.
+    tickerall_api_key: str | None = None
     # Temporary public beta: unlock every product entitlement without changing stored subscriptions.
     beta_free_all_features: bool = True
     # Temporary beta switch allowing hosted MT5 connections on free/trader plans.
