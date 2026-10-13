@@ -55,6 +55,25 @@ async def get_json(client: httpx.AsyncClient, token: str, path: str, params: dic
     return payload
 
 
+def trade_dedupe_key(row: dict) -> str:
+    """Keep distinct partial-close rows even when TickerAll omits closeTicket."""
+    ticket = str(row.get("ticket") or "").strip()
+    close_ticket = str(row.get("closeTicket") or "").strip()
+    close_time = str(row.get("closeTime") or "").strip()
+    if not ticket:
+        return ""
+    return f"{ticket}:{close_ticket or close_time}"
+
+
+def dedupe_trades(rows: list[dict]) -> list[dict]:
+    unique: dict[str, dict] = {}
+    for row in rows:
+        key = trade_dedupe_key(row)
+        if key:
+            unique[key] = row
+    return sorted(unique.values(), key=lambda row: parse_time(row.get("closeTime")))
+
+
 async def fetch_history_range(client: httpx.AsyncClient, token: str, provider_id: str,
                               start: datetime, end: datetime, depth: int = 0) -> list[dict]:
     if end <= start:
@@ -67,19 +86,14 @@ async def fetch_history_range(client: httpx.AsyncClient, token: str, provider_id
     if not isinstance(trades, list):
         raise RuntimeError("tickerall_history_shape_invalid")
     if len(trades) < 5000:
-        return [row for row in trades if isinstance(row, dict)]
+        return dedupe_trades([row for row in trades if isinstance(row, dict)])
     # Never advance a cursor past a possibly truncated provider response.
     if depth >= 16 or (end - start).total_seconds() <= 1:
         raise RuntimeError("history_response_limit_reached")
     middle = start + (end - start) / 2
     left = await fetch_history_range(client, token, provider_id, start, middle, depth + 1)
     right = await fetch_history_range(client, token, provider_id, middle, end, depth + 1)
-    by_key: dict[str, dict] = {}
-    for row in left + right:
-        key = str(row.get("closeTicket") or row.get("ticket") or "")
-        if key:
-            by_key[key] = row
-    return sorted(by_key.values(), key=lambda row: parse_time(row.get("closeTime")))
+    return dedupe_trades(left + right)
 
 
 async def fetch_balance_range(client: httpx.AsyncClient, token: str, provider_id: str,
