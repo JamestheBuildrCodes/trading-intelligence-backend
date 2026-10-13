@@ -1,8 +1,9 @@
 name: TickerAll hosted MT5 cloud sync
 
 on:
-  # Scheduled runs are paused until the TickerAll token/workspace and saved provider IDs are reconciled.
-  # Use workflow_dispatch for a controlled test after configuration is verified.
+  schedule:
+    # Keep the hosted history current. TickerAll usage/pricing may depend on account plan.
+    - cron: "*/15 * * * *"
   workflow_dispatch:
     inputs:
       account_id:
