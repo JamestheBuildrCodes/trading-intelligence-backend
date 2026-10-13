@@ -117,18 +117,25 @@ def normalize_trade(row: dict, account_id: str) -> dict | None:
         volume = float(row.get("volume") or 0)
         entry = float(row.get("openPrice") or 0)
         exit_price = float(row.get("closePrice") or 0)
-        profit = float(row.get("profit") or 0)
+        # An incomplete provider row can legitimately have profit=null. Never
+        # silently turn missing P/L into a real zero-profit trade.
+        complete = row.get("complete", True)
+        raw_profit = row.get("profit")
+        if complete is False or raw_profit is None:
+            return None
+        profit = float(raw_profit)
         swap = float(row.get("swap") or 0)
         commission = float(row.get("commission") or 0)
         opened = parse_time(row.get("openTime"))
         closed = parse_time(row.get("closeTime"))
     except (TypeError, ValueError, OverflowError):
         return None
-    if not ticket or not close_ticket or not symbol or side not in {"buy", "sell"} or volume <= 0 or closed < opened:
+    if not ticket or not symbol or side not in {"buy", "sell"} or volume <= 0 or closed < opened:
         return None
-    # TickerAll returns closed round-trips rather than the MT5 raw deal ledger.
-    # The composite key preserves separate partial-close rows without collisions.
-    position_key = f"tickerall:{ticket}:{close_ticket}"
+    # closeTicket can be null for a trade closed during the current session.
+    # Fall back to stable ticket + close timestamp, not a fabricated zero P/L.
+    close_identity = close_ticket or closed.isoformat()
+    position_key = f"tickerall:{ticket}:{close_identity}"
     return {
         "account_id": account_id,
         "mt5_position_id": position_key,
